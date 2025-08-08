@@ -31,6 +31,3 @@ spec:
           value: "http://votingapp-backend-service:5000"
       imagePullSecrets:
       - name: regcred
-
-
-
