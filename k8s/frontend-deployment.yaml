@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: votingapp-frontend-deployment
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: votingapp-frontend
+  template:
+    metadata:
+      labels:
+        app: votingapp-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: localhost:5000/votingapp-frontend:initial
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+        env:
+        - name: NEXT_PUBLIC_API_URL
+          value: "/api"
+      imagePullSecrets:
+      - name: regcred

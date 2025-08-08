@@ -1,0 +1,49 @@
+# backend-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: votingapp-backend-deployment
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: votingapp-backend
+  template:
+    metadata:
+      labels:
+        app: votingapp-backend
+    spec:
+      containers:
+      - name: backend
+        image: localhost:5000/votingapp-backend:initial
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+        env:
+        - name: PORT
+          value: "5000"
+        - name: SQL_SERVER
+          value: "mysql"
+        - name: SQL_DATABASE
+          value: "votingapp"
+        - name: SQL_USER
+          value: "dbadmin"
+        - name: SQL_PASSWORD
+          value: "Password@Newm3"
+        - name: SQL_ENCRYPT
+          value: "false"
+        - name: JWT_SECRET  
+          value: "6472TY&^3tyruw6773839YUIIOO"
+        - name: HOST
+          value: "0.0.0.0"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      imagePullSecrets:
+      - name: regcred
+
