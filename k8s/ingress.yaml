@@ -5,7 +5,7 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
   - hosts:
     - vote.techanalytics.org
@@ -21,4 +21,3 @@ spec:
             name: votingapp-frontend-service
             port:
               number: 3000
-
