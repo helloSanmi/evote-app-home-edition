@@ -37,6 +37,8 @@ spec:
           value: "6472TY&^3tyruw6773839YUIIOO"
         - name: HOST
           value: "0.0.0.0"
+        - name: SQL_PORT
+          value: "3306"
         resources:
           requests:
             memory: "128Mi"
