@@ -28,7 +28,7 @@ spec:
             memory: "256Mi"
         env:
         - name: NEXT_PUBLIC_API_URL
-          value: http://votingapp-backend-service:5000/api/auth/login
+          value: http://votingapp-backend-service:5000
       imagePullSecrets:
       - name: regcred
 
