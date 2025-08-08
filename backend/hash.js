@@ -7,6 +7,3 @@ bcrypt.hash(password, saltRounds, (err, hash) => {
   if (err) throw err;
   console.log('Hashed password:', hash);
 });
-
-
-
