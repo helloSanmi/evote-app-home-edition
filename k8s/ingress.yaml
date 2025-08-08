@@ -21,3 +21,4 @@ spec:
             name: votingapp-frontend-service
             port:
               number: 3000
+
