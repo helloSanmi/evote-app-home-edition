@@ -5,6 +5,8 @@ metadata:
   name: votingapp-ingress
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # This annotation is crucial for Traefik to handle path routing correctly
+    traefik.ingress.kubernetes.io/rewrite-target: /
 spec:
   ingressClassName: traefik
   tls:
@@ -15,6 +17,13 @@ spec:
   - host: vote.techanalytics.org
     http:
       paths:
+      - path: /api  # This should be /api
+        pathType: Prefix
+        backend:
+          service:
+            name: votingapp-backend-service
+            port:
+              number: 5000
       - path: /
         pathType: Prefix
         backend:
@@ -22,10 +31,3 @@ spec:
             name: votingapp-frontend-service
             port:
               number: 3000
-      - path: /api
-        pathType: Prefix
-        backend:
-          service:
-            name: votingapp-backend-service
-            port:
-              number: 5000
