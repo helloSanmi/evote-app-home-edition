@@ -13,7 +13,7 @@ const adminMiddleware = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.email === "admin" || decoded.email === "admin@example.com" || decoded.id === 9999) {
+    if (decoded.email === "voteadm" || decoded.email === "voteadm@techanalytics" || decoded.id === 9999) {
       req.userId = decoded.id;
       req.userEmail = decoded.email;
       return next();

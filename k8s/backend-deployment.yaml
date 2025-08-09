@@ -23,20 +23,18 @@ spec:
         env:
         - name: PORT
           value: "5000"
-        - name: SQL_SERVER
-          value: "mysql"
-        - name: SQL_DATABASE
-          value: "votingapp"
-        - name: SQL_USER
-          value: "dbadmin"
-        - name: SQL_PASSWORD
-          value: "Password@Newm3"
-        - name: SQL_ENCRYPT
-          value: "false"
+        - name: DB_HOST
+          value: mysql
+        - name: DB_NAME
+          value: votingapp
+        - name: DB_USER
+          value: dbadmin
+        - name: DB_PASSWORD
+          value: Password@Newm3
         - name: JWT_SECRET  
-          value: "6472TY&^3tyruw6773839YUIIOO"
+          value: 6472TY&^3tyruw6773839YUIIOO
         - name: HOST
-          value: "0.0.0.0"
+          value: 0.0.0.0
         - name: SQL_PORT
           value: "3306"
         resources:
