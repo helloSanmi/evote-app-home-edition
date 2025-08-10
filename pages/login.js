@@ -32,6 +32,7 @@ export default function Login() {
       headers: { "Content-Type":"application/json" },
       body: JSON.stringify(formData)
     });
+    
     const data = await res.json();
     setLoading(false);
 
@@ -72,6 +73,8 @@ export default function Login() {
     // Simulate sending reset link
     setForgotMessage("If this email is registered, a password reset link will be sent shortly.");
   };
+
+  console.log("Using API URL:", serverUrl);
 
   return (
     <div className="relative w-full max-w-md mx-auto mt-20">
