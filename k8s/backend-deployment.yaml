@@ -46,4 +46,3 @@ spec:
             cpu: "500m"
       imagePullSecrets:
       - name: regcred
-
