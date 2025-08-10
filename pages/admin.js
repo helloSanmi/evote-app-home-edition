@@ -56,7 +56,7 @@ export default function Admin() {
 
   // Initialize Socket.io
   useEffect(() => {
-    const newSocket = io("http://localhost:5000");
+    const newSocket = io(serverUrl);
     setSocket(newSocket);
     return () => newSocket.close();
   }, []);
