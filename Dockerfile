@@ -22,8 +22,8 @@ RUN npm install --only=production
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 
-# This is the key change: ensure the environment variable is available at runtime
-ENV NEXT_PUBLIC_API_URL="http://votingapp-backend-service:5000"
+# THIS IS THE KEY CHANGE: Use the public-facing URL
+ENV NEXT_PUBLIC_API_URL="https://vote.techanalytics.org/api"
 
 EXPOSE 3000
 CMD ["npx", "next", "start", "-H", "0.0.0.0"]
