@@ -24,7 +24,7 @@ spec:
         - name: PORT
           value: "5000"
         - name: DB_HOST
-          value: mysql
+          value: "192.168.10.51"
         - name: DB_NAME
           value: votingapp
         - name: DB_USER

@@ -1,130 +1,120 @@
 // backend/routes/public.js
 const express = require("express");
-const { getDbPool, sql } = require("../db");
+const jwt = require("jsonwebtoken");
+const { getDbPool } = require("../db");
+
 const router = express.Router();
 
-// GET current/last period
-router.get("/period", async (req, res) => {
+const authOptional = (req, _res, next) => {
+  const token = req.header("Authorization")?.replace("Bearer ", "");
+  if (token) {
+    try {
+      req.user = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      // ignore
+    }
+  }
+  next();
+};
+
+async function latestPeriodWithMeta(pool) {
+  const [rows] = await pool.query(
+    `SELECT vp.*, meta.name AS title, meta.lga AS description
+     FROM VotingPeriod vp
+     LEFT JOIN Candidates meta ON meta.periodId = vp.id AND meta.votes < 0
+     ORDER BY vp.id DESC LIMIT 1`
+  );
+  return rows[0] || null;
+}
+
+// Latest period (with title/description)
+router.get("/period", authOptional, async (_req, res) => {
   try {
     const pool = await getDbPool();
-    const periodResult = await pool.request().query("SELECT TOP 1 * FROM VotingPeriod ORDER BY id DESC");
-    if (periodResult.recordset.length === 0) {
-      return res.json(null);
-    }
-    res.json(periodResult.recordset[0]);
-  } catch (error) {
+    const p = await latestPeriodWithMeta(pool);
+    if (!p) return res.json(null);
+
+    const now = new Date();
+    let status = "upcoming";
+    if (p.forcedEnded || now > new Date(p.endTime)) status = "ended";
+    else if (now >= new Date(p.startTime) && now <= new Date(p.endTime)) status = "active";
+
+    res.json({ ...p, status });
+  } catch {
     res.status(500).json({ error: "Error fetching period" });
   }
 });
 
-// GET candidates
+// Candidates for a period (no votes, exclude meta)
 router.get("/candidates", async (req, res) => {
   const { periodId } = req.query;
+  if (!periodId) return res.status(400).json({ error: "periodId required" });
   try {
     const pool = await getDbPool();
-    if (!periodId) {
-      const pr = await pool.request().query("SELECT TOP 1 * FROM VotingPeriod ORDER BY id DESC");
-      if (pr.recordset.length === 0) return res.json([]);
-      const pid = pr.recordset[0].id;
-      const cr = await pool
-        .request()
-        .input("periodId", sql.Int, pid)
-        .query("SELECT * FROM Candidates WHERE periodId = @periodId AND published = 1");
-      return res.json(cr.recordset);
-    } else {
-      const cr = await pool
-        .request()
-        .input("periodId", sql.Int, periodId)
-        .query("SELECT * FROM Candidates WHERE periodId = @periodId AND published = 1");
-      return res.json(cr.recordset);
-    }
-  } catch (error) {
+    const [rows] = await pool.query(
+      "SELECT id, name, lga, photoUrl FROM Candidates WHERE periodId = ? AND votes >= 0 ORDER BY id DESC",
+      [periodId]
+    );
+    res.json(rows);
+  } catch {
     res.status(500).json({ error: "Error fetching candidates" });
   }
 });
 
-// GET user vote
-router.get("/uservote", async (req, res) => {
-  const { userId, periodId } = req.query;
-  if (!userId || !periodId) return res.json({});
+// Results for a period (requires auth & participation; returns votes)
+router.get("/results", async (req, res) => {
+  const token = req.header("Authorization")?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "No token" });
+  let user;
   try {
-    const pool = await getDbPool();
-    const voteResult = await pool
-      .request()
-      .input("userId", sql.Int, userId)
-      .input("periodId", sql.Int, periodId)
-      .query("SELECT * FROM Votes WHERE userId = @userId AND periodId = @periodId");
-    if (voteResult.recordset.length > 0) {
-      return res.json({ candidateId: voteResult.recordset[0].candidateId });
-    } else {
-      return res.json({});
-    }
-  } catch (error) {
-    res.status(500).json({ error: "Error checking user vote" });
+    user = jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
   }
-});
 
-// GET public results for a specific period if user participated
-router.get("/public-results", async (req, res) => {
-  const { userId, periodId } = req.query;
-  if (!userId || !periodId) return res.status(400).json({ error: "Missing userId or periodId" });
+  const { periodId } = req.query;
+  if (!periodId) return res.status(400).json({ error: "periodId required" });
+
   try {
     const pool = await getDbPool();
-    // Check period
-    const periodRes = await pool
-      .request()
-      .input("periodId", sql.Int, periodId)
-      .query("SELECT * FROM VotingPeriod WHERE id = @periodId");
-    if (periodRes.recordset.length === 0) {
-      return res.json({ results: [], published: false });
+    const [vpRows] = await pool.query("SELECT * FROM VotingPeriod WHERE id = ? LIMIT 1", [periodId]);
+    if (!vpRows.length) return res.status(404).json({ error: "Period not found" });
+    const p = vpRows[0];
+
+    if (!p.resultsPublished) {
+      return res.status(403).json({ error: "Results not published yet" });
     }
-    const period = periodRes.recordset[0];
-    // Check if user voted
-    const voteRes = await pool
-      .request()
-      .input("userId", sql.Int, userId)
-      .input("periodId", sql.Int, periodId)
-      .query("SELECT * FROM Votes WHERE userId = @userId AND periodId = @periodId");
-    if (voteRes.recordset.length === 0) {
-      // no participation
-      return res.json({ results: [], published: false, noParticipation: true });
+
+    // must have participated
+    const [voteRows] = await pool.query("SELECT * FROM Votes WHERE userId = ? AND periodId = ? LIMIT 1", [user.id, periodId]);
+    if (!voteRows.length) {
+      return res.status(403).json({ error: "You did not participate in this session" });
     }
-    // check results published
-    if (!period.resultsPublished) {
-      return res.json({ results: [], published: false });
-    }
-    // load results
-    const results = await pool
-      .request()
-      .input("periodId", sql.Int, periodId)
-      .query("SELECT name, lga, photoUrl, votes FROM Candidates WHERE periodId = @periodId ORDER BY votes DESC");
-    return res.json({ results: results.recordset, published: true });
-  } catch (error) {
-    console.error(error);
+
+    const [candRows] = await pool.query(
+      "SELECT id, name, lga, photoUrl, votes FROM Candidates WHERE periodId = ? AND votes >= 0 ORDER BY votes DESC, id DESC",
+      [periodId]
+    );
+
+    // meta
+    const [metaRows] = await pool.query(
+      "SELECT name AS title, lga AS description FROM Candidates WHERE periodId = ? AND votes < 0 LIMIT 1",
+      [periodId]
+    );
+
+    // voted candidate name
+    const [votedRows] = await pool.query(
+      "SELECT c.id, c.name FROM Votes v JOIN Candidates c ON v.candidateId = c.id WHERE v.userId = ? AND v.periodId = ? LIMIT 1",
+      [user.id, periodId]
+    );
+
+    res.json({
+      period: { ...p, ...(metaRows[0] || {}) },
+      candidates: candRows,
+      youVoted: votedRows[0] || null,
+    });
+  } catch {
     res.status(500).json({ error: "Error fetching results" });
-  }
-});
-
-// GET only the published periods user participated in
-router.get("/periods", async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.json([]);
-  try {
-    const pool = await getDbPool();
-    const result = await pool
-      .request()
-      .input("userId", sql.Int, userId)
-      .query(`
-        SELECT DISTINCT vp.*
-        FROM Votes v
-        JOIN VotingPeriod vp ON v.periodId = vp.id
-        WHERE v.userId = @userId
-          AND vp.resultsPublished = 1
-        ORDER BY vp.id DESC
-      `);
-    return res.json(result.recordset);
-  } catch (error) {
-    res.status(500).json({ error: "Error fetching periods" });
   }
 });
 
