@@ -1,29 +1,21 @@
-# Stage 1: Build
-FROM node:18-alpine3.19 AS builder
-
+# Dockerfile  (frontend at repo root)
+FROM node:20-alpine AS deps
 WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --no-audit --no-fund
 
-COPY package.json package-lock.json ./
-RUN npm install
-
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+ENV NEXT_PUBLIC_API_URL=""
 RUN npm run build
 
-# Stage 2: Production image
-FROM node:18-alpine3.19 AS runner
-
+FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-
-COPY package.json package-lock.json ./
-RUN npm install --only=production
-
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-
-# THIS IS THE KEY CHANGE: Use the public-facing URL
-ENV NEXT_PUBLIC_API_URL="https://vote.techanalytics.org/api"
-
+COPY --from=builder /app/package.json ./
 EXPOSE 3000
-CMD ["npx", "next", "start", "-H", "0.0.0.0"]
+CMD ["npx","next","start","-p","3000"]

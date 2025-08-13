@@ -1,25 +1,17 @@
-// db.js
-
+// backend/db.js
 const mysql = require("mysql2/promise");
-
-const config = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: parseInt(process.env.DB_PORT),
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-};
-
 let pool;
-
-const getDbPool = async () => {
-  if (!pool) {
-    pool = mysql.createPool(config);
-  }
+async function getDbPool() {
+  if (pool) return pool;
+  pool = await mysql.createPool({
+    host: process.env.DB_HOST,                 // <-- external Ubuntu MySQL host/IP
+    port: Number(process.env.DB_PORT || 3306),
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME || "votingdb",
+    waitForConnections: true,
+    connectionLimit: 15,
+  });
   return pool;
-};
-
+}
 module.exports = { getDbPool };

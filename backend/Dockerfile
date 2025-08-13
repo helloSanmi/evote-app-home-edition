@@ -1,11 +1,11 @@
-FROM node:18-alpine
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
+# backend/Dockerfile
+FROM node:20-alpine
+WORKDIR /srv/app
+ENV NODE_ENV=production
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY . .
-
+ENV HOST=0.0.0.0
+ENV PORT=5000
 EXPOSE 5000
-CMD ["npm", "start"]
+CMD ["node","server.js"]
