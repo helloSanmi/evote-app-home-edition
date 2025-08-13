@@ -1,0 +1,57 @@
+# In your repo root locally, create .github/workflows/deploy.yml:
+name: CI-CD
+on:
+  push:
+    branches: ["main"]
+env:
+  REGISTRY: ghcr.io
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/voting-frontend
+  IMAGE_BACKEND: ghcr.io/${{ github.repository_owner }}/voting-backend
+  K8S_NAMESPACE: voting
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_FRONTEND }}:latest
+            ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BACKEND }}:latest
+            ${{ env.IMAGE_BACKEND }}:${{ github.sha }}
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Write kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > $HOME/.kube/config
+      - name: Apply K8s
+        run: |
+          cd k8s
+          kubectl apply -k .
+          kubectl -n ${{ env.K8S_NAMESPACE }} set image deploy/frontend frontend=${{ env.IMAGE_FRONTEND }}:${{ github.sha }} || true
+          kubectl -n ${{ env.K8S_NAMESPACE }} set image deploy/backend backend=${{ env.IMAGE_BACKEND }}:${{ github.sha }} || true
+          kubectl -n ${{ env.K8S_NAMESPACE }} rollout status deploy/frontend
+          kubectl -n ${{ env.K8S_NAMESPACE }} rollout status deploy/backend
