@@ -4,7 +4,7 @@ import io from "socket.io-client";
 import { useRouter } from "next/router";
 import { notifyError, notifySuccess } from "../components/Toast";
 
-const API = process.env.NEXT_PUBLIC_API_URL;
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 export default function Admin() {
   const router = useRouter();
