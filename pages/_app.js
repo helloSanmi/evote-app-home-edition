@@ -4,6 +4,7 @@ import Layout from "../components/Layout";
 import { ToastContainer } from "react-toastify";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
+import Head from "next/head";   // ✅ import Head
 
 export default function MyApp({ Component, pageProps }) {
   const router = useRouter();
@@ -17,6 +18,11 @@ export default function MyApp({ Component, pageProps }) {
 
   return (
     <Layout>
+      <Head>
+        {/* 👇 use PNG favicon */}
+        <link rel="icon" type="image/png" href="../favicon.png" />
+        <title>Voting App</title>
+      </Head>
       <div key={routeKey} className="page-anim">
         <Component {...pageProps} />
       </div>
@@ -26,8 +32,14 @@ export default function MyApp({ Component, pageProps }) {
           animation: fadeScale 240ms ease-out;
         }
         @keyframes fadeScale {
-          0% { opacity: 0; transform: translateY(8px) scale(0.98); }
-          100% { opacity: 1; transform: translateY(0) scale(1); }
+          0% {
+            opacity: 0;
+            transform: translateY(8px) scale(0.98);
+          }
+          100% {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
         }
       `}</style>
     </Layout>

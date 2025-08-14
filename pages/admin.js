@@ -1,10 +1,9 @@
-// frontend/pages/admin.js  (replace)
+// frontend/pages/admin.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import io from "socket.io-client";
 import { useRouter } from "next/router";
 import { notifyError, notifySuccess } from "../components/Toast";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "";
+import { api, API_BASE } from "../lip/apiBase";
 
 export default function Admin() {
   const router = useRouter();
@@ -57,7 +56,8 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    socketRef.current = io(API, { transports: ["websocket", "polling"] });
+    const base = typeof window !== "undefined" ? window.location.origin : API_BASE || "";
+    socketRef.current = io(base, { transports: ["websocket", "polling"], path: "/socket.io" });
     socketRef.current.on("voteUpdate", () => isActive(period) && loadLiveVotes());
     socketRef.current.on("resultsPublished", () => { loadPeriod(); setLiveVotes([]); });
     return () => socketRef.current?.disconnect();
@@ -68,7 +68,6 @@ export default function Admin() {
   useEffect(() => { if (tab === "past") loadPeriods(); }, [tab]);
 
   useEffect(() => {
-    // keep admin live results updating periodically while active
     clearInterval(liveTimer.current);
     if (isActive(period)) {
       liveTimer.current = setInterval(loadLiveVotes, 5000);
@@ -88,11 +87,11 @@ export default function Admin() {
   }
 
   const loadPeriod = async () => {
-    const r = await fetch(`${API}/api/admin/get-period`, { headers });
+    const r = await fetch(api("/admin/get-period"), { headers });
     const p = await safeJson(r);
     setPeriod(p || null);
     if (p) {
-      const mr = await fetch(`${API}/api/admin/meta?periodId=${p.id}`, { headers });
+      const mr = await fetch(api(`/admin/meta?periodId=${p.id}`), { headers });
       const m = await safeJson(mr);
       setMeta(m || { title: null, description: null });
     } else {
@@ -103,7 +102,7 @@ export default function Admin() {
   const loadUnpublished = async () => {
     setUnpubLoading(true);
     try {
-      const r = await fetch(`${API}/api/admin/unpublished`, { headers });
+      const r = await fetch(api("/admin/unpublished"), { headers });
       const data = await safeJson(r);
       if (!r.ok) throw new Error(data?.error || "Failed to load unpublished");
       setUnpublished(Array.isArray(data) ? data : []);
@@ -120,7 +119,7 @@ export default function Admin() {
     const payload = { name: (name || "").trim(), lga: (lga || "").trim(), photoUrl: (photoUrl || "").trim() };
     if (!payload.name) return notifyError("Name is required");
     try {
-      const res = await fetch(`${API}/api/admin/candidate`, { method: "POST", headers, body: JSON.stringify(payload) });
+      const res = await fetch(api("/admin/candidate"), { method: "POST", headers, body: JSON.stringify(payload) });
       const data = await safeJson(res);
       if (!res.ok || !data?.success) throw new Error(data?.error || "Error adding candidate");
       setName(""); setLga(""); setPhotoUrl("");
@@ -132,7 +131,7 @@ export default function Admin() {
   const deleteCandidate = async (id) => {
     if (!confirm("Delete this candidate?")) return;
     try {
-      const res = await fetch(`${API}/api/admin/remove-candidate?candidateId=${id}`, { method: "DELETE", headers });
+      const res = await fetch(api(`/admin/remove-candidate?candidateId=${id}`), { method: "DELETE", headers });
       const data = await safeJson(res);
       if (!res.ok || !data?.success) throw new Error(data?.error || "Delete failed");
       await loadUnpublished();
@@ -143,7 +142,7 @@ export default function Admin() {
   const startVoting = async () => {
     if (!title.trim() || !start || !end) return notifyError("Enter title, start, end");
     if (unpublished.length === 0) return notifyError("Add candidates first");
-    const res = await fetch(`${API}/api/admin/voting-period`, {
+    const res = await fetch(api("/admin/voting-period"), {
       method: "POST", headers, body: JSON.stringify({ title, description, start, end })
     });
     const data = await safeJson(res);
@@ -155,7 +154,7 @@ export default function Admin() {
 
   const publishResults = async () => {
     setPublishing(true);
-    const res = await fetch(`${API}/api/admin/publish-results`, { method: "POST", headers });
+    const res = await fetch(api("/admin/publish-results"), { method: "POST", headers });
     const data = await safeJson(res);
     setPublishing(false);
     if (!res.ok || !data?.success) {
@@ -167,7 +166,7 @@ export default function Admin() {
   };
 
   const endVotingEarly = async () => {
-    const res = await fetch(`${API}/api/admin/end-voting-early`, { method: "POST", headers });
+    const res = await fetch(api("/admin/end-voting-early"), { method: "POST", headers });
     const data = await safeJson(res);
     if (!res.ok || !data?.success) return notifyError(data?.error || "Error ending voting");
     await loadPeriod();
@@ -177,7 +176,7 @@ export default function Admin() {
   const loadPeriods = async () => {
     setPeriodsLoading(true);
     try {
-      const r = await fetch(`${API}/api/admin/periods`, { headers });
+      const r = await fetch(api("/admin/periods"), { headers });
       const data = await safeJson(r);
       if (!r.ok) throw new Error(data?.error || "Failed to load sessions");
       setPeriods(Array.isArray(data) ? data : []);
@@ -193,8 +192,8 @@ export default function Admin() {
     setSelectedPeriod(p); setSelectedCandidates([]); setAudit(null);
     try {
       const [cr, ar] = await Promise.all([
-        fetch(`${API}/api/admin/candidates?periodId=${p.id}`, { headers }),
-        fetch(`${API}/api/admin/audit?periodId=${p.id}`, { headers }),
+        fetch(api(`/admin/candidates?periodId=${p.id}`), { headers }),
+        fetch(api(`/admin/audit?periodId=${p.id}`), { headers }),
       ]);
       setSelectedCandidates((await cr.json()) || []);
       setAudit((await ar.json()) || null);
@@ -204,13 +203,12 @@ export default function Admin() {
   };
 
   const loadLiveVotes = async () => {
-    const r = await fetch(`${API}/api/admin/live-votes`, { headers });
+    const r = await fetch(api("/admin/live-votes"), { headers });
     setLiveVotes((await r.json()) || []);
   };
 
   return (
     <div className="max-w-6xl mx-auto px-4">
-      {/* Tabs */}
       <div className="flex gap-2 border-b pb-2">
         <button onClick={() => setTab("overview")} className={`px-4 py-2 rounded-t transition ${tab === "overview" ? "bg-white border border-b-transparent shadow-sm" : "bg-gray-200 hover:bg-gray-300"}`}>Dashboard</button>
         <button onClick={() => setTab("past")} className={`px-4 py-2 rounded-t transition ${tab === "past" ? "bg-white border border-b-transparent shadow-sm" : "bg-gray-200 hover:bg-gray-300"}`}>Previous Sessions</button>
@@ -218,7 +216,6 @@ export default function Admin() {
 
       {tab === "overview" && (
         <div className="space-y-6 mt-4">
-          {/* Current Period */}
           <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
             <h2 className="text-lg font-bold mb-2">Current / Latest Voting Period</h2>
             {period ? (
@@ -229,7 +226,6 @@ export default function Admin() {
                 <div>End: {new Date(period.endTime).toLocaleString()}</div>
                 <div>Results Published: {period.resultsPublished ? "Yes" : "No"}</div>
                 <div className="flex gap-2 mt-3">
-                  {/* Publish enabled only when end reached or forced ended */}
                   <button
                     onClick={publishResults}
                     disabled={publishing || !!period.resultsPublished || !canPublish(period)}
@@ -237,7 +233,6 @@ export default function Admin() {
                   >
                     {period.resultsPublished ? "Results Published" : (publishing ? "Publishing..." : "Publish Results")}
                   </button>
-                  {/* Hide End Early when not active */}
                   {isActive(period) && !period.resultsPublished && (
                     <button onClick={endVotingEarly} className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700">
                       End Voting Early
@@ -250,7 +245,6 @@ export default function Admin() {
             )}
           </div>
 
-          {/* Add Candidate */}
           <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-bold">Add Candidate</h2>
@@ -266,7 +260,6 @@ export default function Admin() {
             </form>
           </div>
 
-          {/* Unpublished with Delete */}
           <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
             <h2 className="text-lg font-bold mb-3">Unpublished Candidates</h2>
             {unpubLoading ? (
@@ -291,7 +284,6 @@ export default function Admin() {
             )}
           </div>
 
-          {/* Start Voting */}
           <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
             <h2 className="text-lg font-bold mb-3">Start Voting</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -309,7 +301,6 @@ export default function Admin() {
             </button>
           </div>
 
-          {/* Live Votes */}
           {isActive(period) && (
             <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
               <h2 className="text-lg font-bold mb-3">Live Votes</h2>

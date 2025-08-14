@@ -1,16 +1,15 @@
-// frontend/pages/vote.js  (replace)
+// frontend/pages/vote.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { notifyError, notifySuccess } from "../components/Toast";
-
-const API = process.env.NEXT_PUBLIC_API_URL;
+import { api } from "../lip/apiBase";
 
 export default function Vote() {
   const router = useRouter();
   const token = useMemo(() => (typeof window !== "undefined" ? localStorage.getItem("token") : null), []);
-  const [period, setPeriod] = useState(null); // includes title/description/status/resultsPublished
+  const [period, setPeriod] = useState(null);
   const [candidates, setCandidates] = useState([]);
-  const [myVote, setMyVote] = useState(null); // {id,name}
+  const [myVote, setMyVote] = useState(null);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [nowTick, setNowTick] = useState(Date.now());
@@ -30,20 +29,19 @@ export default function Vote() {
   const loadAll = async () => {
     try {
       setLoading(true);
-      const pr = await fetch(`${API}/api/public/period`);
+      const pr = await fetch(api("/public/period"));
       const p = await pr.json();
       setPeriod(p);
 
       if (!p) { setCandidates([]); setMyVote(null); setLoading(false); return; }
 
-      // vote status
-      const sr = await fetch(`${API}/api/vote/status?periodId=${p.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      const sr = await fetch(api(`/vote/status?periodId=${p.id}`), { headers: { Authorization: `Bearer ${token}` } });
       const s = await sr.json();
       setMyVote(s?.youVoted || null);
 
       const active = p.status === "active";
       if (active && !s?.hasVoted) {
-        const cr = await fetch(`${API}/api/public/candidates?periodId=${p.id}`);
+        const cr = await fetch(api(`/public/candidates?periodId=${p.id}`));
         setCandidates(await cr.json());
       } else {
         setCandidates([]);
@@ -76,7 +74,7 @@ export default function Vote() {
   const castVote = async () => {
     if (!selected) return notifyError("Select a candidate");
     try {
-      const res = await fetch(`${API}/api/vote`, {
+      const res = await fetch(api("/vote"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ candidateId: selected }),

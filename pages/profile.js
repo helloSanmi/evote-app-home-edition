@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { notifyError } from "../components/Toast";
+import { api } from "../lip/apiBase";
 
 export default function Profile() {
   const router = useRouter();
@@ -18,7 +19,7 @@ export default function Profile() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/me`, {
+      const res = await fetch(api("/auth/me"), {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();

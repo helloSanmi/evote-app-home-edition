@@ -35,6 +35,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          build-args: |
+            NEXT_PUBLIC_API_URL= 
           push: true
           tags: ghcr.io/${{ steps.owner.outputs.lc_owner }}/voting-frontend:latest
 

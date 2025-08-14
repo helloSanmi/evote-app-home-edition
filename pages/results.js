@@ -1,16 +1,15 @@
-// frontend/pages/results.js  (replace)
+// frontend/pages/results.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { notifyError } from "../components/Toast";
-
-const API = process.env.NEXT_PUBLIC_API_URL;
+import { api } from "../lip/apiBase";
 
 export default function Results() {
   const router = useRouter();
   const token = useMemo(() => (typeof window !== "undefined" ? localStorage.getItem("token") : null), []);
-  const [period, setPeriod] = useState(null); // includes title/description/status/resultsPublished
+  const [period, setPeriod] = useState(null);
   const [list, setList] = useState([]);
-  const [youVoted, setYouVoted] = useState(null); // {id,name}
+  const [youVoted, setYouVoted] = useState(null);
   const [winnerIds, setWinnerIds] = useState([]);
   const [img, setImg] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -33,26 +32,24 @@ export default function Results() {
   const loadAll = async () => {
     try {
       setLoading(true);
-      const pr = await fetch(`${API}/api/public/period`);
+      const pr = await fetch(api("/public/period"));
       const p = await pr.json();
       setPeriod(p);
 
       if (!p) { setList([]); setYouVoted(null); setLoading(false); return; }
 
-      // your vote (even before publish)
-      const sr = await fetch(`${API}/api/vote/status?periodId=${p.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      const sr = await fetch(api(`/vote/status?periodId=${p.id}`), { headers: { Authorization: `Bearer ${token}` } });
       const s = await sr.json();
       setYouVoted(s?.youVoted || null);
 
       if (p.resultsPublished) {
-        // participants can view
-        const rr = await fetch(`${API}/api/public/results?periodId=${p.id}`, { headers: { Authorization: `Bearer ${token}` } });
+        const rr = await fetch(api(`/public/results?periodId=${p.id}`), { headers: { Authorization: `Bearer ${token}` } });
         if (rr.ok) {
           const data = await rr.json();
           const arr = Array.isArray(data.candidates) ? data.candidates : [];
           setList(arr);
           setWinnerIds(computeWinners(arr));
-          setPeriod((old) => ({ ...(data.period || p) })); // ensure title/description applied
+          setPeriod((old) => ({ ...(data.period || p) }));
         } else {
           setList([]);
           setWinnerIds([]);
@@ -94,7 +91,6 @@ export default function Results() {
             <div className="text-gray-500">You’re not eligible to view results for this session.</div>
           ) : (
             <>
-              {/* Winner section */}
               <div className="mb-4 p-4 border rounded-lg bg-indigo-50">
                 <div className="font-bold mb-2">Winner{winnerIds.length > 1 ? "s" : ""}</div>
                 <div className="flex flex-wrap gap-3">
@@ -110,14 +106,11 @@ export default function Results() {
                 </div>
               </div>
 
-              {/* Full table/cards */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {list.map((c) => (
                   <div
                     key={c.id}
-                    className={`border rounded p-3 text-center transition transform hover:-translate-y-0.5 hover:shadow ${
-                      winnerIds.includes(c.id) ? "ring-2 ring-indigo-600" : ""
-                    }`}
+                    className={`border rounded p-3 text-center transition transform hover:-translate-y-0.5 hover:shadow ${winnerIds.includes(c.id) ? "ring-2 ring-indigo-600" : ""}`}
                   >
                     <img
                       src={c.photoUrl || "/placeholder.png"}
