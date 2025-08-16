@@ -8,10 +8,12 @@ async function getDbPool() {
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME || "votingdb",
+    database: process.env.DB_NAME,
     waitForConnections: true,
     connectionLimit: 15,
   });
+  // sanity ping
+  await pool.query("SELECT 1");
   return pool;
 }
 module.exports = { getDbPool };
