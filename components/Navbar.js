@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import Image from "next/image";
 
 export default function Navbar() {
   const router = useRouter();
@@ -17,14 +16,25 @@ export default function Navbar() {
       setLoggedIn(!!localStorage.getItem("token"));
     };
     sync();
+    // react to changes from other tabs as well
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
   }, []);
 
   const signOut = () => {
-    localStorage.clear();
-    window.dispatchEvent(new Event("storage"));
-    router.replace("/login");
+    try {
+      // Clear only what we set (safer than full clear if you add other app data later)
+      localStorage.removeItem("token");
+      localStorage.removeItem("userId");
+      localStorage.removeItem("username");
+      localStorage.removeItem("isAdmin");
+      // Let other tabs know (no heavy state in same tab)
+      window.dispatchEvent(new Event("storage"));
+    } catch {}
+    // Use a HARD navigation to login to avoid any client-side redirect loops / stuck sockets
+    if (typeof window !== "undefined") {
+      window.location.replace("/login");
+    }
   };
 
   const item = (href, label) => (
@@ -42,15 +52,7 @@ export default function Navbar() {
     return (
       <nav className="w-full bg-white/90 backdrop-blur border-b">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-          <Image
-            src="/logo.png"
-            alt="E-Voting Logo"
-            width={35}
-            height={35}
-            priority
-            className="cursor-pointer"
-            onClick={() => router.push("/")}
-          />
+          <span className="font-extrabold tracking-tight text-lg">E-Voting</span>
         </div>
       </nav>
     );
@@ -59,15 +61,16 @@ export default function Navbar() {
   return (
     <nav className="w-full bg-white/90 backdrop-blur border-b">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition">
-          <Image
+        {/* Logo */}
+        <Link href="/" className="flex items-center gap-2 hover:opacity-90">
+          <img
             src="/logo.png"
-            alt="E-Voting Logo"
-            width={35}
-            height={35}
-            priority
+            alt="E-Voting"
+            className="h-7 w-7 rounded"
           />
+          <span className="font-extrabold tracking-tight text-lg">E-Voting</span>
         </Link>
+
         <div className="flex items-center gap-2">
           {isAdmin ? (
             <>
