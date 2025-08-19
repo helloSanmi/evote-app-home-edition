@@ -5,7 +5,7 @@ import { ToastContainer } from "react-toastify";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Head from "next/head";   // ✅ import Head
-import { Analytics } from '@vercel/analytics/next';
+
 
 export default function MyApp({ Component, pageProps }) {
   const router = useRouter();
@@ -43,8 +43,8 @@ export default function MyApp({ Component, pageProps }) {
           }
         }
       `}</style>
-      <Analytics />
     </Layout>
+    
   );
 }
 
