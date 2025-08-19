@@ -12,37 +12,31 @@ export default function Navbar() {
   useEffect(() => {
     setMounted(true);
     const sync = () => {
-      setIsAdmin(localStorage.getItem("isAdmin") === "true");
+      const raw = localStorage.getItem("isAdmin");
+      const admin = raw === "true" || raw === "1";
+      setIsAdmin(admin);
       setLoggedIn(!!localStorage.getItem("token"));
     };
     sync();
-    // react to changes from other tabs as well
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
   }, []);
 
   const signOut = () => {
     try {
-      // Clear only what we set (safer than full clear if you add other app data later)
       localStorage.removeItem("token");
       localStorage.removeItem("userId");
       localStorage.removeItem("username");
       localStorage.removeItem("isAdmin");
-      // Let other tabs know (no heavy state in same tab)
       window.dispatchEvent(new Event("storage"));
     } catch {}
-    // Use a HARD navigation to login to avoid any client-side redirect loops / stuck sockets
-    if (typeof window !== "undefined") {
-      window.location.replace("/login");
-    }
+    if (typeof window !== "undefined") window.location.replace("/login");
   };
 
   const item = (href, label) => (
     <Link
       href={href}
-      className={`px-3 py-1 rounded transition hover:bg-gray-100 ${
-        router.pathname === href ? "bg-gray-200 font-semibold" : ""
-      }`}
+      className={`px-3 py-1 rounded transition hover:bg-gray-100 ${router.pathname === href ? "bg-gray-200 font-semibold" : ""}`}
     >
       {label}
     </Link>
@@ -61,13 +55,8 @@ export default function Navbar() {
   return (
     <nav className="w-full bg-white/90 backdrop-blur border-b">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-        {/* Logo */}
         <Link href="/" className="flex items-center gap-2 hover:opacity-90">
-          <img
-            src="/logo.png"
-            alt="E-Voting"
-            className="h-7 w-7 rounded"
-          />
+          <img src="/logo.png" alt="E-Voting" className="h-7 w-7 rounded" />
           <span className="font-extrabold tracking-tight text-lg">E-Voting</span>
         </Link>
 
@@ -76,12 +65,7 @@ export default function Navbar() {
             <>
               {item("/admin", "Admin")}
               {item("/faq", "FAQ")}
-              <button
-                onClick={signOut}
-                className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition"
-              >
-                Sign out
-              </button>
+              <button onClick={signOut} className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition">Sign out</button>
             </>
           ) : (
             <>
@@ -92,10 +76,7 @@ export default function Navbar() {
               {!loggedIn && item("/login", "Login")}
               {!loggedIn && item("/register", "Register")}
               {loggedIn && (
-                <button
-                  onClick={signOut}
-                  className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition"
-                >
+                <button onClick={signOut} className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition">
                   Sign out
                 </button>
               )}

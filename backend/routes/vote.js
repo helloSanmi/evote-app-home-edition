@@ -1,91 +1,117 @@
 // backend/routes/vote.js
 const express = require("express");
-const jwt = require("jsonwebtoken");
-const { getDbPool } = require("../db");
-
 const router = express.Router();
+const { getDbPool } = require("../db");
+const { requireAuth } = require("../middleware/auth");
 
-function requireUser(req, res, next) {
-  const token = req.header("Authorization")?.replace("Bearer ", "");
-  if (!token) return res.status(401).json({ error: "No token" });
+// utility
+const isPeriodActive = (row) => {
+  const now = Date.now();
+  const start = new Date(row.startTime).getTime();
+  const end = new Date(row.endTime).getTime();
+  return !row.forcedEnded && now >= start && now < end && !row.resultsPublished;
+};
+
+// GET /api/vote/status?periodId=#
+router.get("/status", requireAuth, async (req, res) => {
+  const periodId = Number(req.query.periodId);
+  if (!periodId) return res.status(400).json({ error: "periodId required" });
+
+  const pool = await getDbPool();
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
-
-async function latestPeriod(pool) {
-  const [rows] = await pool.query("SELECT * FROM VotingPeriod ORDER BY id DESC LIMIT 1");
-  return rows[0] || null;
-}
-
-// Status: have I voted in (periodId | latest)?
-router.get("/status", requireUser, async (req, res) => {
-  const { periodId } = req.query;
-  try {
-    const pool = await getDbPool();
-    let pid = periodId;
-    if (!pid) {
-      const p = await latestPeriod(pool);
-      if (!p) return res.json({ hasVoted: false, periodId: null, youVoted: null });
-      pid = p.id;
-    }
-    const [rows] = await pool.query(
-      `SELECT v.candidateId, c.name
-       FROM Votes v JOIN Candidates c ON c.id = v.candidateId
-       WHERE v.userId = ? AND v.periodId = ? LIMIT 1`,
-      [req.user.id, pid]
+    const [[p]] = await pool.query(
+      `SELECT id, startTime, endTime, resultsPublished, forcedEnded FROM VotingPeriod WHERE id=?`,
+      [periodId]
     );
-    if (!rows.length) return res.json({ hasVoted: false, periodId: Number(pid), youVoted: null });
-    res.json({ hasVoted: true, periodId: Number(pid), youVoted: { id: rows[0].candidateId, name: rows[0].name } });
-  } catch {
-    res.status(500).json({ error: "Error fetching vote status" });
+    if (!p) return res.status(404).json({ error: "Period not found" });
+
+    const [[v]] = await pool.query(
+      `SELECT candidateId FROM Votes WHERE userId=? AND periodId=? LIMIT 1`,
+      [req.user.id, periodId]
+    );
+
+    let youVoted = null;
+    if (v) {
+      const [[c]] = await pool.query(`SELECT id, name FROM Candidates WHERE id=?`, [v.candidateId]);
+      youVoted = c ? { id: c.id, name: c.name } : null;
+    }
+
+    return res.json({
+      hasVoted: !!v,
+      youVoted,
+      active: isPeriodActive(p),
+    });
+  } catch (e) {
+    console.error("vote/status:", e);
+    return res.status(500).json({ error: "Failed to load status" });
   }
 });
 
-// Cast vote in latest active period
-router.post("/", requireUser, async (req, res) => {
-  const { candidateId } = req.body || {};
+// POST /api/vote  { candidateId }
+router.post("/", requireAuth, async (req, res) => {
+  const candidateId = Number(req.body?.candidateId);
   if (!candidateId) return res.status(400).json({ error: "candidateId required" });
 
+  const pool = await getDbPool();
+  const conn = await pool.getConnection();
+
   try {
-    const pool = await getDbPool();
-    const p = await latestPeriod(pool);
-    if (!p) return res.status(400).json({ error: "No voting session" });
+    await conn.beginTransaction();
 
-    const now = new Date();
-    const active = !p.forcedEnded && now >= new Date(p.startTime) && now <= new Date(p.endTime);
-    if (!active) return res.status(400).json({ error: "Voting is not active" });
-
-    // candidate must belong to this period and not be the meta row
-    const [candRows] = await pool.query(
-      "SELECT id, name FROM Candidates WHERE id = ? AND periodId = ? AND votes >= 0 LIMIT 1",
-      [candidateId, p.id]
+    // candidate + period
+    const [[cand]] = await conn.query(
+      `SELECT c.id, c.name, c.periodId, p.startTime, p.endTime, p.resultsPublished, p.forcedEnded
+       FROM Candidates c
+       JOIN VotingPeriod p ON p.id=c.periodId
+       WHERE c.id=?`,
+      [candidateId]
     );
-    if (!candRows.length) return res.status(400).json({ error: "Invalid candidate" });
+    if (!cand) {
+      await conn.rollback();
+      return res.status(404).json({ error: "Candidate not found" });
+    }
+    if (!isPeriodActive(cand)) {
+      await conn.rollback();
+      return res.status(400).json({ error: "Voting period is not active" });
+    }
 
-    // ensure user hasn't voted in this period
-    const [existing] = await pool.query(
-      "SELECT id FROM Votes WHERE userId = ? AND periodId = ? LIMIT 1",
-      [req.user.id, p.id]
+    // ensure user has not voted in this period
+    const [[already]] = await conn.query(
+      `SELECT id FROM Votes WHERE userId=? AND periodId=? LIMIT 1`,
+      [req.user.id, cand.periodId]
     );
-    if (existing.length) return res.status(400).json({ error: "You already voted" });
+    if (already) {
+      await conn.rollback();
+      return res.status(400).json({ error: "You have already voted in this session" });
+    }
 
-    // record vote
-    await pool.query("INSERT INTO Votes (userId, candidateId, periodId) VALUES (?, ?, ?)", [
-      req.user.id,
-      candidateId,
-      p.id,
-    ]);
-    await pool.query("UPDATE Candidates SET votes = votes + 1 WHERE id = ?", [candidateId]);
+    // cast vote + increment candidate tally
+    await conn.query(
+      `INSERT INTO Votes (userId, candidateId, periodId) VALUES (?,?,?)`,
+      [req.user.id, cand.id, cand.periodId]
+    );
+    await conn.query(`UPDATE Candidates SET votes = votes + 1 WHERE id=?`, [cand.id]);
 
-    req.app.get("emitUpdate")?.("voteUpdate", { periodId: p.id, candidateId });
+    await conn.commit();
 
-    res.json({ success: true, candidateId, candidateName: candRows[0].name });
-  } catch {
-    res.status(500).json({ error: "Error casting vote" });
+    // notify sockets
+    try {
+      const io = req.app.get("socketio");
+      req.app.get("emitUpdate")?.("voteUpdate", { periodId: cand.periodId });
+      io && io.emit("voteUpdate", { periodId: cand.periodId });
+    } catch {}
+
+    return res.json({ success: true, candidateId: cand.id, candidateName: cand.name });
+  } catch (e) {
+    await conn.rollback();
+    // handle unique constraint (userId, periodId)
+    if (e && e.code === "ER_DUP_ENTRY") {
+      return res.status(400).json({ error: "You have already voted in this session" });
+    }
+    console.error("vote/post:", e);
+    return res.status(500).json({ error: "Error casting vote" });
+  } finally {
+    conn.release();
   }
 });
 

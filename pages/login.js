@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { notifyError, notifySuccess } from "../components/Toast";
-import { api } from "../lip/apiBase";
 
 export default function Login() {
   const router = useRouter();
@@ -11,14 +10,18 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (localStorage.getItem("token")) router.replace("/");
+    if (localStorage.getItem("token")) {
+      const admin = localStorage.getItem("isAdmin");
+      const isAdmin = admin === "true" || admin === "1";
+      router.replace(isAdmin ? "/admin" : "/");
+    }
   }, [router]);
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const res = await fetch(api("/auth/login"), {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identifier, password }),
@@ -28,10 +31,12 @@ export default function Login() {
       localStorage.setItem("token", data.token);
       localStorage.setItem("userId", data.userId);
       localStorage.setItem("username", data.username);
-      localStorage.setItem("isAdmin", data.isAdmin);
+      localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
       window.dispatchEvent(new Event("storage"));
       notifySuccess("Signed in successfully");
-      router.replace("/");
+      if (typeof window !== "undefined") {
+        window.location.replace(data.isAdmin ? "/admin" : "/");
+      }
     } catch (e) {
       notifyError(e.message);
     } finally {
@@ -49,27 +54,16 @@ export default function Login() {
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="block text-sm text-gray-700 mb-1">Username or Email</label>
-            <input
-              className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="johndoe or john@mail.com"
-            />
+            <input className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
+                   value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="johndoe or john@mail.com" />
           </div>
           <div>
             <label className="block text-sm text-gray-700 mb-1">Password</label>
-            <input
-              type="password"
-              className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
+            <input type="password" className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
+                   value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
           </div>
-          <button
-            disabled={busy}
-            className="w-full bg-blue-600 text-white rounded py-3 font-semibold transition hover:bg-blue-700 disabled:opacity-50"
-          >
+          <button disabled={busy}
+                  className="w-full bg-blue-600 text-white rounded py-3 font-semibold transition hover:bg-blue-700 disabled:opacity-50">
             {busy ? "Signing in…" : "Sign In"}
           </button>
         </form>

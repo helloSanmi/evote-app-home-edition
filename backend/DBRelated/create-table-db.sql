@@ -1,3 +1,41 @@
+CREATE DATABASE votingapp;
+
+-- Create the user 'dbadmin' and grant privileges on the DB server
+CREATE USER 'dbadmin'@'192.168.10.51' IDENTIFIED BY 'Password@Newm3';
+GRANT ALL PRIVILEGES ON votingapp.* TO 'dbadmin'@'localhost';
+FLUSH PRIVILEGES;
+
+USE votingapp;
+
+INSERT INTO Users (fullName, username, email, password, hasVoted)
+VALUES (
+    'Admin Vote',
+    'voteadm',
+    'voteadm@techanalytics.org',
+    '$2a$10$XSKk37J0lsxMyuGckb1S0OvfZkH63csXfQTyQoZDY7pllPpyJvjRe',
+    FALSE
+);
+
+
+-- Lines to delete all entries
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+TRUNCATE TABLE Votes;
+TRUNCATE TABLE Candidates;
+TRUNCATE TABLE VotingPeriod;
+TRUNCATE TABLE Users;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+DELETE FROM Users;
+
+-- EOD
+
+
+SELECT * FROM Users;
+
+
 -- Create the 'Users' table
 CREATE TABLE Users (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -54,3 +92,52 @@ CREATE TABLE Votes (
     INDEX idx_period_candidate (periodId, candidateId),
     INDEX idx_userId (userId)
 ) ENGINE=InnoDB;
+
+
+
+-- === Users: add eligibility-related fields (all nullable / backward-compatible)
+ALTER TABLE Users
+  ADD COLUMN dateOfBirth DATE NULL,
+  ADD COLUMN residenceLGA VARCHAR(255) NULL,
+  ADD COLUMN nationalId VARCHAR(255) NULL UNIQUE,
+  ADD COLUMN phone VARCHAR(50) NULL,
+  ADD COLUMN eligibilityStatus ENUM('pending','eligible','ineligible') NOT NULL DEFAULT 'pending';
+
+-- === VotingPeriod: add eligibility rules + keep your titles in-period (no separate meta table needed)
+ALTER TABLE VotingPeriod
+  ADD COLUMN title VARCHAR(255) NULL,
+  ADD COLUMN description TEXT NULL,
+  ADD COLUMN minAge INT NULL,
+  ADD COLUMN scopeLGA VARCHAR(255) NULL,
+  ADD COLUMN requireWhitelist TINYINT(1) NOT NULL DEFAULT 0;
+
+-- === Optional: whitelist table used only when requireWhitelist = 1
+CREATE TABLE IF NOT EXISTS EligibleVoters (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NULL,
+  voterId VARCHAR(255) UNIQUE NULL,
+  lga VARCHAR(255) NULL,
+  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+
+SELECT * FROM EligibleVoters;
+
+
+-- Disable foreign key checks to allow truncation safely
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- Clear votes first (depends on Users & Candidates)
+TRUNCATE TABLE Votes;
+
+-- Clear candidates (depends on VotingPeriod)
+TRUNCATE TABLE Candidates;
+
+-- Clear sessions
+TRUNCATE TABLE VotingPeriod;
+
+-- Clear users
+TRUNCATE TABLE Users;
+
+-- Re-enable foreign key checks
+SET FOREIGN_KEY_CHECKS = 1;

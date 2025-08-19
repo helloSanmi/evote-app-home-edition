@@ -1,110 +1,107 @@
 // frontend/pages/admin.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import io from "socket.io-client";
-import { useRouter } from "next/router";
 import { notifyError, notifySuccess } from "../components/Toast";
-import { api, API_BASE } from "../lip/apiBase";
+import { useRouter } from "next/router";
+import { useModal } from "../components/Modal";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 export default function Admin() {
   const router = useRouter();
+  const { open } = useModal();
+
+  const token = useMemo(() => (typeof window !== "undefined" ? localStorage.getItem("token") : null), []);
+  const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }), [token]);
 
   const [tab, setTab] = useState("overview");
-  const [period, setPeriod] = useState(null);
-  const [meta, setMeta] = useState({ title: null, description: null });
 
+  // New session form
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
 
+  // Unpublished pool
   const [name, setName] = useState("");
-  const [lga, setLga] = useState("");
+  const [state, setState] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
   const [unpublished, setUnpublished] = useState([]);
   const [unpubLoading, setUnpubLoading] = useState(false);
 
+  // Active/upcoming/awaiting publish sessions
+  const [sessions, setSessions] = useState([]);
+  const [live, setLive] = useState({}); // periodId -> [{id,name,votes,...}]
+  const timersRef = useRef({});
+  const sock = useRef(null);
+
+  // Past
   const [periods, setPeriods] = useState([]);
-  const [periodsLoading, setPeriodsLoading] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
-  const [selectedCandidates, setSelectedCandidates] = useState([]);
+  const [selectedCandidates, setSelectedCandidates] = useState([]); // ensure array
   const [audit, setAudit] = useState(null);
 
-  const [liveVotes, setLiveVotes] = useState([]);
-  const [publishing, setPublishing] = useState(false);
-
-  const token = useMemo(() => (typeof window !== "undefined" ? localStorage.getItem("token") : null), []);
-  const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }), [token]);
-
-  const socketRef = useRef(null);
-  const liveTimer = useRef(null);
-
   useEffect(() => {
-    if (typeof window === "undefined") return;
     const admin = localStorage.getItem("isAdmin") === "true";
     if (!localStorage.getItem("token") || !admin) router.replace("/login");
   }, [router]);
 
-  const isActive = (p) => {
-    if (!p) return false;
-    const now = Date.now();
-    return !p.forcedEnded && now >= new Date(p.startTime).getTime() && now < new Date(p.endTime).getTime();
-  };
-  const canPublish = (p) => {
-    if (!p) return false;
-    const now = Date.now();
-    return p.forcedEnded || now >= new Date(p.endTime).getTime();
-  };
+  useEffect(() => {
+    loadSessions();
+    loadUnpublished();
+  }, []); // eslint-disable-line
 
   useEffect(() => {
-    const base = typeof window !== "undefined" ? window.location.origin : API_BASE || "";
-    socketRef.current = io(base, { transports: ["websocket", "polling"], path: "/socket.io" });
-    socketRef.current.on("voteUpdate", () => isActive(period) && loadLiveVotes());
-    socketRef.current.on("resultsPublished", () => { loadPeriod(); setLiveVotes([]); });
-    return () => socketRef.current?.disconnect();
+    // socket listeners
+    sock.current = io(API, { transports: ["websocket", "polling"] });
+    sock.current.on("voteUpdate", ({ periodId }) => {
+      if (periodId) fetchLive(periodId);
+    });
+    sock.current.on("resultsPublished", ({ periodId }) => {
+      open({
+        title: "Results Published",
+        message: `Results for Session #${periodId} are now available.`,
+        confirmText: "OK",
+      });
+      loadSessions();
+    });
+    return () => sock.current?.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period]);
-
-  useEffect(() => { loadPeriod(); loadUnpublished(); }, []); // eslint-disable-line
-  useEffect(() => { if (tab === "past") loadPeriods(); }, [tab]);
+  }, []);
 
   useEffect(() => {
-    clearInterval(liveTimer.current);
-    if (isActive(period)) {
-      liveTimer.current = setInterval(loadLiveVotes, 5000);
-      loadLiveVotes();
-    }
-    return () => clearInterval(liveTimer.current);
+    // poll live for active sessions
+    Object.values(timersRef.current).forEach(clearInterval);
+    timersRef.current = {};
+    sessions
+      .filter((s) => s.status === "active")
+      .forEach((s) => {
+        fetchLive(s.id);
+        timersRef.current[s.id] = setInterval(() => fetchLive(s.id), 5000);
+      });
+    return () => {
+      Object.values(timersRef.current).forEach(clearInterval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period?.startTime, period?.endTime, period?.forcedEnded]);
+  }, [sessions]);
 
-  async function safeJson(res) {
+  async function safeJson(r) {
     try {
-      if (!res) return null;
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) { await res.text(); return null; }
-      return await res.json();
-    } catch { return null; }
-  }
-
-  const loadPeriod = async () => {
-    const r = await fetch(api("/admin/get-period"), { headers });
-    const p = await safeJson(r);
-    setPeriod(p || null);
-    if (p) {
-      const mr = await fetch(api(`/admin/meta?periodId=${p.id}`), { headers });
-      const m = await safeJson(mr);
-      setMeta(m || { title: null, description: null });
-    } else {
-      setMeta({ title: null, description: null });
+      if (!r) return null;
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) return null;
+      return await r.json();
+    } catch {
+      return null;
     }
-  };
+  }
 
   const loadUnpublished = async () => {
     setUnpubLoading(true);
     try {
-      const r = await fetch(api("/admin/unpublished"), { headers });
+      const r = await fetch(`${API}/api/admin/unpublished`, { headers });
       const data = await safeJson(r);
-      if (!r.ok) throw new Error(data?.error || "Failed to load unpublished");
+      if (!r || !r.ok) throw new Error((data && data.error) || "Failed to load unpublished");
       setUnpublished(Array.isArray(data) ? data : []);
     } catch (e) {
       setUnpublished([]);
@@ -116,99 +113,103 @@ export default function Admin() {
 
   const addCandidate = async (e) => {
     e.preventDefault();
-    const payload = { name: (name || "").trim(), lga: (lga || "").trim(), photoUrl: (photoUrl || "").trim() };
-    if (!payload.name) return notifyError("Name is required");
+    if (!name.trim()) return notifyError("Name is required");
     try {
-      const res = await fetch(api("/admin/candidate"), { method: "POST", headers, body: JSON.stringify(payload) });
-      const data = await safeJson(res);
-      if (!res.ok || !data?.success) throw new Error(data?.error || "Error adding candidate");
-      setName(""); setLga(""); setPhotoUrl("");
+      const r = await fetch(`${API}/api/admin/candidate`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: name.trim(), state: state.trim(), photoUrl: (photoUrl || "").trim() }),
+      });
+      const data = await safeJson(r);
+      if (!r || !r.ok || !data?.success) throw new Error((data && data.error) || "Error adding candidate");
+      setName(""); setState(""); setPhotoUrl("");
       await loadUnpublished();
       notifySuccess("Candidate added");
-    } catch (e) { notifyError(e.message); }
+    } catch (e) {
+      notifyError(e.message);
+    }
   };
 
-  const deleteCandidate = async (id) => {
+  const removeCandidate = async (id) => {
     if (!confirm("Delete this candidate?")) return;
-    try {
-      const res = await fetch(api(`/admin/remove-candidate?candidateId=${id}`), { method: "DELETE", headers });
-      const data = await safeJson(res);
-      if (!res.ok || !data?.success) throw new Error(data?.error || "Delete failed");
-      await loadUnpublished();
-      notifySuccess("Candidate deleted");
-    } catch (e) { notifyError(e.message); }
+    const r = await fetch(`${API}/api/admin/remove-candidate?candidateId=${id}`, { method: "DELETE", headers });
+    const data = await safeJson(r);
+    if (!r || !r.ok || !data?.success) return notifyError((data && data.error) || "Delete failed");
+    await loadUnpublished();
+    notifySuccess("Candidate deleted");
   };
 
-  const startVoting = async () => {
+  const startSession = async () => {
     if (!title.trim() || !start || !end) return notifyError("Enter title, start, end");
     if (unpublished.length === 0) return notifyError("Add candidates first");
-    const res = await fetch(api("/admin/voting-period"), {
-      method: "POST", headers, body: JSON.stringify({ title, description, start, end })
+    const r = await fetch(`${API}/api/admin/voting-period`, {
+      method: "POST", headers, body: JSON.stringify({ title, description, start, end }),
     });
-    const data = await safeJson(res);
-    if (!res.ok || !data?.success) return notifyError(data?.error || "Error starting voting");
+    const data = await safeJson(r);
+    if (!r || !r.ok || !data?.success) return notifyError((data && data.error) || "Error starting voting");
     setTitle(""); setDescription(""); setStart(""); setEnd("");
-    await loadPeriod(); await loadUnpublished(); setTab("overview");
-    notifySuccess("Voting started");
+    await loadUnpublished(); await loadSessions();
+    notifySuccess("Voting session started");
   };
 
-  const publishResults = async () => {
-    setPublishing(true);
-    const res = await fetch(api("/admin/publish-results"), { method: "POST", headers });
-    const data = await safeJson(res);
-    setPublishing(false);
-    if (!res.ok || !data?.success) {
-      if (data?.already) { await loadPeriod(); return; }
-      return notifyError(data?.error || "Error publishing results");
-    }
-    await loadPeriod();
+  const loadSessions = async () => {
+    const r = await fetch(`${API}/api/admin/active-periods`, { headers });
+    const data = await safeJson(r);
+    if (!r || !r.ok) return notifyError((data && data.error) || "Failed to load sessions");
+    setSessions(Array.isArray(data) ? data : []);
+  };
+
+  const fetchLive = async (periodId) => {
+    const r = await fetch(`${API}/api/admin/live-votes?periodId=${periodId}`, { headers });
+    const data = await safeJson(r);
+    if (r && r.ok) setLive((s) => ({ ...s, [periodId]: Array.isArray(data) ? data : [] }));
+  };
+
+  const publish = async (p) => {
+    const r = await fetch(`${API}/api/admin/publish-results?periodId=${p.id}`, { method: "POST", headers });
+    const data = await safeJson(r);
+    if (!r || !r.ok || (!data?.success && !data?.already)) return notifyError((data && data.error) || "Error publishing");
+    await loadSessions();
     notifySuccess("Results published");
   };
 
-  const endVotingEarly = async () => {
-    const res = await fetch(api("/admin/end-voting-early"), { method: "POST", headers });
-    const data = await safeJson(res);
-    if (!res.ok || !data?.success) return notifyError(data?.error || "Error ending voting");
-    await loadPeriod();
-    notifySuccess("Voting ended early");
+  const endEarly = async (p) => {
+    const r = await fetch(`${API}/api/admin/end-voting-early?periodId=${p.id}`, { method: "POST", headers });
+    const data = await safeJson(r);
+    if (!r || !r.ok || !data?.success) return notifyError((data && data.error) || "Error ending voting");
+    await loadSessions();
+    notifySuccess("Voting ended");
   };
 
-  const loadPeriods = async () => {
-    setPeriodsLoading(true);
-    try {
-      const r = await fetch(api("/admin/periods"), { headers });
-      const data = await safeJson(r);
-      if (!r.ok) throw new Error(data?.error || "Failed to load sessions");
-      setPeriods(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setPeriods([]);
-      notifyError(e.message);
-    } finally {
-      setPeriodsLoading(false);
-    }
+  // Past sessions
+  const loadPast = async () => {
+    const r = await fetch(`${API}/api/admin/periods`, { headers });
+    const data = await safeJson(r);
+    if (r && r.ok) setPeriods(Array.isArray(data) ? data : []);
   };
+  useEffect(() => { if (tab === "past") loadPast(); }, [tab]); // eslint-disable-line
 
   const viewPeriod = async (p) => {
-    setSelectedPeriod(p); setSelectedCandidates([]); setAudit(null);
+    setSelectedPeriod(p);
     try {
       const [cr, ar] = await Promise.all([
-        fetch(api(`/admin/candidates?periodId=${p.id}`), { headers }),
-        fetch(api(`/admin/audit?periodId=${p.id}`), { headers }),
+        fetch(`${API}/api/admin/candidates?periodId=${p.id}`, { headers }),
+        fetch(`${API}/api/admin/audit?periodId=${p.id}`, { headers }),
       ]);
-      setSelectedCandidates((await cr.json()) || []);
-      setAudit((await ar.json()) || null);
+      const cand = (await cr.json());
+      const aud = (await ar.json());
+      setSelectedCandidates(Array.isArray(cand) ? cand : []);
+      setAudit(aud || null);
     } catch {
+      setSelectedCandidates([]);
+      setAudit(null);
       notifyError("Failed to load period details");
     }
   };
 
-  const loadLiveVotes = async () => {
-    const r = await fetch(api("/admin/live-votes"), { headers });
-    setLiveVotes((await r.json()) || []);
-  };
-
   return (
     <div className="max-w-6xl mx-auto px-4">
+      {/* Tabs */}
       <div className="flex gap-2 border-b pb-2">
         <button onClick={() => setTab("overview")} className={`px-4 py-2 rounded-t transition ${tab === "overview" ? "bg-white border border-b-transparent shadow-sm" : "bg-gray-200 hover:bg-gray-300"}`}>Dashboard</button>
         <button onClick={() => setTab("past")} className={`px-4 py-2 rounded-t transition ${tab === "past" ? "bg-white border border-b-transparent shadow-sm" : "bg-gray-200 hover:bg-gray-300"}`}>Previous Sessions</button>
@@ -216,54 +217,111 @@ export default function Admin() {
 
       {tab === "overview" && (
         <div className="space-y-6 mt-4">
-          <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
-            <h2 className="text-lg font-bold mb-2">Current / Latest Voting Period</h2>
-            {period ? (
-              <>
-                <div className="font-semibold">{meta?.title || "Untitled Election"}</div>
-                {meta?.description && <div className="text-gray-600 mb-2">{meta.description}</div>}
-                <div>Start: {new Date(period.startTime).toLocaleString()}</div>
-                <div>End: {new Date(period.endTime).toLocaleString()}</div>
-                <div>Results Published: {period.resultsPublished ? "Yes" : "No"}</div>
-                <div className="flex gap-2 mt-3">
-                  <button
-                    onClick={publishResults}
-                    disabled={publishing || !!period.resultsPublished || !canPublish(period)}
-                    className={`px-4 py-2 rounded ${period.resultsPublished ? "bg-gray-400" : canPublish(period) ? "bg-green-600 text-white hover:bg-green-700" : "bg-gray-300"}`}
-                  >
-                    {period.resultsPublished ? "Results Published" : (publishing ? "Publishing..." : "Publish Results")}
-                  </button>
-                  {isActive(period) && !period.resultsPublished && (
-                    <button onClick={endVotingEarly} className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700">
-                      End Voting Early
-                    </button>
-                  )}
-                </div>
-              </>
+          {/* Multi-session deck */}
+          <div className="bg-white rounded-2xl shadow p-5">
+            <h2 className="text-lg font-bold mb-3">Active / Upcoming / Awaiting Publish</h2>
+            {sessions.length === 0 ? (
+              <div className="text-gray-600">No sessions yet.</div>
             ) : (
-              <div className="text-gray-600">No period yet.</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {sessions.map((p) => {
+                  const l = live[p.id] || [];
+                  const ended = p.status === "ended";
+                  const canPublish = ended && !p.resultsPublished;
+                  const active = p.status === "active";
+                  return (
+                    <div key={p.id} className="border rounded-xl p-4 hover:shadow transition">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold">{p.title || `Session #${p.id}`}</div>
+                          {p.description && <div className="text-sm text-gray-600">{p.description}</div>}
+                          <div className="text-xs text-gray-500 mt-1">
+                            {new Date(p.startTime).toLocaleString()} — {new Date(p.endTime).toLocaleString()}
+                          </div>
+                        </div>
+                        <span className={`text-xs px-2 py-1 rounded ${active ? "bg-green-100 text-green-800" : ended ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"}`}>
+                          {active ? "Active" : ended ? "Ended" : "Upcoming"}
+                        </span>
+                      </div>
+
+                      {/* Live panel */}
+                      {active && (
+                        <div className="mt-3">
+                          <div className="text-sm font-semibold mb-1">Live Votes</div>
+                          <div className="space-y-2">
+                            {l.length === 0 ? (
+                              <div className="text-sm text-gray-500">Loading…</div>
+                            ) : (
+                              l.map((c) => (
+                                <div key={c.id} className="flex items-center justify-between border rounded p-2">
+                                  <div className="flex items-center gap-2">
+                                    <img src={c.photoUrl || "/placeholder.png"} className="w-7 h-7 rounded object-cover" alt={c.name} />
+                                    <div className="text-sm">{c.name}</div>
+                                  </div>
+                                  <div className="font-semibold">{c.votes}</div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Actions */}
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={() => publish(p)}
+                          disabled={!canPublish}
+                          className={`px-4 py-2 rounded ${canPublish ? "bg-green-600 text-white hover:bg-green-700" : "bg-gray-300 text-gray-700"}`}
+                        >
+                          {p.resultsPublished ? "Published" : "Publish Results"}
+                        </button>
+                        {active && (
+                          <button onClick={() => endEarly(p)} className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700">
+                            End Early
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
-          <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-bold">Add Candidate</h2>
-              <button onClick={loadUnpublished} className="text-sm px-3 py-1 rounded border hover:bg-gray-50">Reload Preview</button>
+          {/* Create new session */}
+          <div className="bg-white rounded-2xl shadow p-5">
+            <h2 className="text-lg font-bold mb-3">Start New Voting Session</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input className="border p-2 rounded md:col-span-2" placeholder="Election Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+              <textarea className="border p-2 rounded md:col-span-2" placeholder="Short Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+              <input type="datetime-local" className="border p-2 rounded" value={start} onChange={(e) => setStart(e.target.value)} />
+              <input type="datetime-local" className="border p-2 rounded" value={end} onChange={(e) => setEnd(e.target.value)} />
             </div>
-            <form onSubmit={addCandidate} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <button
+              onClick={startSession}
+              className={`mt-3 px-4 py-2 rounded text-white ${unpublished.length === 0 || !title || !start || !end ? "bg-gray-400" : "bg-indigo-600 hover:bg-indigo-700"}`}
+              disabled={unpublished.length === 0 || !title || !start || !end}
+            >
+              Start Voting
+            </button>
+          </div>
+
+          {/* Unpublished candidates */}
+          <div className="bg-white rounded-2xl shadow p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-bold">Unpublished Candidates</h2>
+              <button onClick={loadUnpublished} className="text-sm px-3 py-1 rounded border hover:bg-gray-50">Reload</button>
+            </div>
+            <form onSubmit={addCandidate} className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
               <input className="border p-2 rounded" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-              <input className="border p-2 rounded" placeholder="LGA" value={lga} onChange={(e) => setLga(e.target.value)} />
+              <input className="border p-2 rounded" placeholder="State" value={state} onChange={(e) => setState(e.target.value)} />
               <input className="border p-2 rounded" placeholder="Photo URL" value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} />
               <div className="md:col-span-3">
                 <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Add Candidate</button>
               </div>
             </form>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
-            <h2 className="text-lg font-bold mb-3">Unpublished Candidates</h2>
             {unpubLoading ? (
-              <div className="text-gray-500 animate-pulse">Loading preview…</div>
+              <div className="text-gray-500 animate-pulse">Loading…</div>
             ) : unpublished.length === 0 ? (
               <div className="text-gray-500">No unpublished candidates</div>
             ) : (
@@ -274,70 +332,27 @@ export default function Admin() {
                       <img src={c.photoUrl || "/placeholder.png"} className="w-12 h-12 rounded object-cover" alt={c.name} />
                       <div>
                         <div className="font-semibold">{c.name}</div>
-                        <div className="text-sm text-gray-600">{c.lga || "-"}</div>
+                        <div className="text-sm text-gray-600">{c.state || "-"}</div>
                       </div>
                     </div>
-                    <button onClick={() => deleteCandidate(c.id)} className="text-white bg-red-600 px-3 py-1 rounded hover:bg-red-700">Delete</button>
+                    <button onClick={() => removeCandidate(c.id)} className="text-white bg-red-600 px-3 py-1 rounded hover:bg-red-700">Delete</button>
                   </div>
                 ))}
               </div>
             )}
           </div>
-
-          <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
-            <h2 className="text-lg font-bold mb-3">Start Voting</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <input className="border p-2 rounded md:col-span-2" placeholder="Election Title (e.g., Presidential Election 2025)" value={title} onChange={(e) => setTitle(e.target.value)} />
-              <textarea className="border p-2 rounded md:col-span-2" placeholder="Short Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-              <input type="datetime-local" className="border p-2 rounded" value={start} onChange={(e) => setStart(e.target.value)} />
-              <input type="datetime-local" className="border p-2 rounded" value={end} onChange={(e) => setEnd(e.target.value)} />
-            </div>
-            <button
-              onClick={startVoting}
-              className={`mt-3 px-4 py-2 rounded text-white ${unpublished.length === 0 || !title || !start || !end ? "bg-gray-400" : "bg-indigo-600 hover:bg-indigo-700"}`}
-              disabled={unpublished.length === 0 || !title || !start || !end}
-            >
-              Start Voting
-            </button>
-          </div>
-
-          {isActive(period) && (
-            <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
-              <h2 className="text-lg font-bold mb-3">Live Votes</h2>
-              {liveVotes.length === 0 ? (
-                <div className="text-gray-500">No candidates</div>
-              ) : (
-                <div className="space-y-2">
-                  {liveVotes.map((c) => (
-                    <div key={c.id} className="flex items-center justify-between border p-2 rounded">
-                      <div className="flex items-center gap-3">
-                        <img src={c.photoUrl || "/placeholder.png"} className="w-8 h-8 rounded object-cover" alt={c.name} />
-                        <span className="font-medium">{c.name}</span>
-                      </div>
-                      <span className="font-semibold">{c.votes}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 
       {tab === "past" && (
-        <div className="grid grid-cols-1 md-grid-cols-2 md:grid-cols-2 gap-4 mt-4">
-          <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-bold">Previous Voting Sessions</h2>
-              <button onClick={() => loadPeriods()} className="text-sm px-3 py-1 rounded border hover:bg-gray-50">Reload</button>
-            </div>
-            {periodsLoading ? (
-              <div className="text-gray-500 animate-pulse">Loading sessions…</div>
-            ) : periods.length === 0 ? (
-              <div className="text-gray-500">No sessions yet.</div>
-            ) : (
-              <div className="space-y-2">
-                {periods.map((p) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <div className="bg-white rounded-2xl shadow p-5">
+            <h2 className="text-lg font-bold mb-3">Previous Voting Sessions</h2>
+            <div className="space-y-2">
+              {periods.length === 0 ? (
+                <div className="text-gray-500">No sessions yet.</div>
+              ) : (
+                periods.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => viewPeriod(p)}
@@ -347,12 +362,12 @@ export default function Admin() {
                     <div className="text-sm text-gray-600">Start: {new Date(p.startTime).toLocaleString()}</div>
                     <div className="text-sm text-gray-600">End: {new Date(p.endTime).toLocaleString()}</div>
                   </button>
-                ))}
-              </div>
-            )}
+                ))
+              )}
+            </div>
           </div>
 
-          <div className="bg-white rounded-2xl shadow p-5 transition hover:shadow-lg">
+          <div className="bg-white rounded-2xl shadow p-5">
             <h2 className="text-lg font-bold mb-3">Session Details</h2>
             {!selectedPeriod ? (
               <div className="text-gray-500">Select a session to view details.</div>
@@ -378,19 +393,19 @@ export default function Admin() {
                   </div>
                 )}
                 <div className="space-y-2">
-                  {selectedCandidates.length === 0 ? (
-                    <div className="text-gray-500">No candidates</div>
-                  ) : (
+                  {Array.isArray(selectedCandidates) && selectedCandidates.length > 0 ? (
                     selectedCandidates.map((c) => (
                       <div key={c.id} className="flex items-center gap-3 border rounded p-2">
                         <img src={c.photoUrl || "/placeholder.png"} className="w-10 h-10 rounded object-cover" alt={c.name} />
                         <div className="flex-1">
                           <div className="font-medium">{c.name}</div>
-                          <div className="text-sm text-gray-600">{c.lga || "-"}</div>
+                          <div className="text-sm text-gray-600">{c.state || "-"}</div>
                         </div>
                         <div className="font-semibold">{c.votes} votes</div>
                       </div>
                     ))
+                  ) : (
+                    <div className="text-gray-500">No candidates</div>
                   )}
                 </div>
               </>

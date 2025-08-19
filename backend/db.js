@@ -11,6 +11,11 @@ async function getDbPool() {
     database: process.env.DB_NAME,
     waitForConnections: true,
     connectionLimit: 15,
+    queueLimit: 0,
+    connectTimeout: 10000,           // ms
+    acquireTimeout: 10000,           // ms
+    keepAliveInitialDelay: 10000,    // ms
+    enableKeepAlive: true
   });
   // sanity ping
   await pool.query("SELECT 1");

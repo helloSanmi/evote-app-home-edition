@@ -1,19 +1,20 @@
 // frontend/components/Layout.js
 import Navbar from "./Navbar";
+import { ModalProvider } from "./Modal";
 
 export default function Layout({ children }) {
   return (
-    <div className="flex flex-col min-h-screen">
-      {/* Navbar */}
-      <Navbar />
-
-      {/* Page content */}
-      <main className="flex-grow">{children}</main>
-
-      {/* Sticky footer with subtle hover effect */}
-      <footer className="bg-white/90 backdrop-blur border-t py-3 text-center text-sm text-gray-600 transition hover:bg-gray-50">
-        © 2025 <span className="font-semibold">Tech Analytics</span>
-      </footer>
-    </div>
+    <ModalProvider>
+      <div className="min-h-screen flex flex-col">
+        <Navbar />
+        <main className="flex-1 bg-gray-50">{children}</main>
+        <footer className="sticky bottom-0 bg-white/90 backdrop-blur border-t">
+          <div className="max-w-6xl mx-auto px-4 py-3 text-sm text-gray-600 flex items-center justify-between">
+            <div>&copy; 2025 Tech Analytics</div>
+            <div>E-Voting</div>
+          </div>
+        </footer>
+      </div>
+    </ModalProvider>
   );
 }

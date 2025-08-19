@@ -14,14 +14,14 @@ const mysql = require("mysql2/promise");
     });
 
     // 2. Hash the password
-    const plainPassword = "Thelord@123"; // change if needed
+    const plainPassword = "admin000"; // change if needed
     const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
     // 3. Insert the admin user
     const [result] = await pool.query(
       `INSERT INTO Users (fullName, username, email, password, hasVoted)
        VALUES (?, ?, ?, ?, 0)`,
-      ["Vote Admin", "admin", "admin@example.com", hashedPassword]
+      ["Vote Admin", "voteadm", "admin@techanalytics.org", hashedPassword]
     );
 
     console.log(`✅ Admin created with ID: ${result.insertId}`);
