@@ -1,177 +1,208 @@
 // backend/routes/auth.js
 const express = require("express");
-const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { getDbPool } = require("../db");
 const { requireAuth } = require("../middleware/auth");
 
-// helpers
-const adminList = () =>
-  (process.env.ADMIN_USERNAMES || process.env.ADMIN_USERS || "")
+const router = express.Router();
+
+function adminList() {
+  return String(process.env.ADMIN_USERNAMES || "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+}
 
-const isEnvAdmin = (u) => {
-  if (!u) return false;
+function isAdminUser(user) {
   const list = adminList();
-  return list.includes(String(u.username || "").toLowerCase()) ||
-         list.includes(String(u.email || "").toLowerCase());
-};
+  const handles = [];
+  if (user?.username) handles.push(String(user.username).toLowerCase());
+  if (user?.email) handles.push(String(user.email).toLowerCase());
+  return handles.some((h) => list.includes(h));
+}
 
-const sign = (u) =>
-  jwt.sign(
-    { id: u.id, username: u.username, email: u.email, isAdmin: isEnvAdmin(u) },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
+function signToken(user) {
+  const payload = {
+    userId: user.id,
+    username: user.username,
+    email: user.email,
+    isAdmin: isAdminUser(user),
+  };
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "7d" });
+}
 
-const yearsBetween = (d) => {
-  if (!d) return 0;
-  const dob = new Date(d);
-  if (Number.isNaN(dob.getTime())) return 0;
-  const now = new Date();
-  let age = now.getFullYear() - dob.getFullYear();
-  const m = now.getMonth() - dob.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
-  return age;
-};
-
-const computeEligibility = (nationality, dob) => {
-  const nat = (nationality || "").toLowerCase();
-  if (!nat || !dob) return "pending";
-  return nat === "nigerian" && yearsBetween(dob) >= 18 ? "eligible" : "ineligible";
-};
-
-// routes
-router.get("/health", (_req, res) => res.json({ ok: true }));
-
-// Register (all fields required, username forced lowercase)
+// Register
 router.post("/register", async (req, res) => {
-  const body = req.body || {};
-  const fullName = String(body.fullName || "").trim();
-  const username = String(body.username || "").trim().toLowerCase();
-  const email = String(body.email || "").trim();
-  const password = String(body.password || "");
-  const phone = String(body.phone || "").trim();
-  const state = String(body.state || "").trim();
-  const residenceLGA = String(body.residenceLGA || "").trim();
-  let nationality = String(body.nationality || "").trim();
-  const dateOfBirth = String(body.dateOfBirth || "").trim();
-
-  if (!fullName || !username || !email || !password || !phone || !state || !residenceLGA || !nationality || !dateOfBirth) {
-    return res.status(400).json({ error: "All fields are required" });
-  }
-
-  nationality = nationality.toLowerCase() === "nigerian" ? "Nigerian" : "Other";
-
   try {
+    let {
+      fullName,
+      username,
+      email,
+      password,
+      state,
+      residenceLGA,
+      nationality,
+      dateOfBirth,
+      phone,
+    } = req.body || {};
+
+    if (!fullName || !username || !email || !password || !state || !residenceLGA || !nationality || !dateOfBirth || !phone) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    username = String(username).toLowerCase().trim();
+    email = String(email).toLowerCase().trim();
+
     const pool = await getDbPool();
 
-    const [[u1]] = await pool.query(`SELECT id FROM Users WHERE LOWER(username)=LOWER(?)`, [username]);
-    if (u1) return res.status(400).json({ error: "Username already in use" });
+    const [[exists]] = await pool.query(
+      "SELECT id FROM Users WHERE LOWER(username)=? OR LOWER(email)=?",
+      [username, email]
+    );
+    if (exists) return res.status(400).json({ error: "User already exists" });
 
-    const [[u2]] = await pool.query(`SELECT id FROM Users WHERE LOWER(email)=LOWER(?)`, [email]);
-    if (u2) return res.status(400).json({ error: "Email already in use" });
-
-    const hash = await bcrypt.hash(password, 10);
-    const eligibilityStatus = computeEligibility(nationality, dateOfBirth);
+    const hash = await bcrypt.hash(String(password), 10);
 
     await pool.query(
       `INSERT INTO Users
-        (fullName, username, email, password, hasVoted, state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus)
-       VALUES (?,?,?,?,0,?,?,?,?,?,?)`,
-      [fullName, username, email, hash, state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus]
+       (fullName, username, email, password, hasVoted, state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus)
+       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+      [
+        String(fullName).trim(),
+        username,
+        email,
+        hash,
+        String(state).trim(),
+        String(nationality).trim(),
+        dateOfBirth, // yyyy-mm-dd
+        String(residenceLGA).trim(),
+        String(phone).trim(),
+        "eligible",
+      ]
     );
 
-    return res.json({ success: true });
+    res.json({ success: true });
   } catch (e) {
     console.error("auth/register:", e);
-    return res.status(500).json({ error: "Registration failed" });
+    res.status(500).json({ error: "Registration failed" });
   }
 });
 
-// Login (case-insensitive)
+// Login (username or email)
 router.post("/login", async (req, res) => {
-  const { identifier, password } = req.body || {};
-  if (!identifier || !password) return res.status(400).json({ error: "identifier and password required" });
-
   try {
+    const { identifier, password } = req.body || {};
+    if (!identifier || !password) return res.status(400).json({ error: "Missing credentials" });
+
+    const ident = String(identifier).toLowerCase().trim();
     const pool = await getDbPool();
     const [[user]] = await pool.query(
-      `SELECT id, fullName, username, email, password, hasVoted,
-              state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus, createdAt
-       FROM Users
-       WHERE LOWER(username)=LOWER(?) OR LOWER(email)=LOWER(?)
-       LIMIT 1`,
-      [identifier, identifier]
+      "SELECT id, fullName, username, email, password FROM Users WHERE LOWER(username)=? OR LOWER(email)=?",
+      [ident, ident]
     );
-    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+    if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+    const ok = await bcrypt.compare(String(password), user.password);
+    if (!ok) return res.status(400).json({ error: "Invalid credentials" });
 
-    return res.json({
-      token: sign(user),
+    const token = signToken(user);
+    res.json({
+      token,
       userId: user.id,
       username: user.username,
-      isAdmin: isEnvAdmin(user),
+      email: user.email,
+      isAdmin: isAdminUser(user),
     });
   } catch (e) {
     console.error("auth/login:", e);
-    return res.status(500).json({ error: "Login failed" });
+    res.status(500).json({ error: "Login failed" });
   }
 });
 
-// Profile
+// Me
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const pool = await getDbPool();
     const [[u]] = await pool.query(
-      `SELECT id, fullName, username, email, hasVoted, createdAt,
-              state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus
-       FROM Users WHERE id=? LIMIT 1`,
+      `SELECT id, fullName, username, email, hasVoted, state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus, createdAt
+       FROM Users WHERE id=?`,
       [req.user.id]
     );
     if (!u) return res.status(404).json({ error: "User not found" });
 
-    const eligibility = u.eligibilityStatus || computeEligibility(u.nationality, u.dateOfBirth) || "pending";
-    return res.json({ ...u, eligibilityStatus: eligibility, isAdmin: isEnvAdmin(u) });
+    res.json({ ...u, isAdmin: isAdminUser(u) });
   } catch (e) {
     console.error("auth/me:", e);
-    return res.status(500).json({ error: "Failed to load profile" });
+    res.status(500).json({ error: "Failed to load profile" });
   }
 });
 
-// Update profile (unchanged from previous message if you already added it)
-router.put("/update-profile", requireAuth, async (req, res) => {
+// Update profile (email / phone / state / residenceLGA)
+router.put("/profile", requireAuth, async (req, res) => {
   try {
-    const phone = req.body?.phone ?? null;
-    const state = req.body?.state ?? null;
-    const residenceLGA = req.body?.residenceLGA ?? null;
-    const natIn = req.body?.nationality ?? null;
-    const dateOfBirth = req.body?.dateOfBirth ?? null;
+    let { email, phone, state, residenceLGA } = req.body || {};
+    email = email ? String(email).toLowerCase().trim() : null;
 
-    const nationality = natIn ? (String(natIn).toLowerCase() === "nigerian" ? "Nigerian" : "Other") : null;
-    const eligibilityStatus = computeEligibility(nationality, dateOfBirth);
+    const fields = [];
+    const params = [];
+
+    if (email) {
+      const pool = await getDbPool();
+      const [[exists]] = await pool.query(
+        "SELECT id FROM Users WHERE LOWER(email)=? AND id<>?",
+        [email, req.user.id]
+      );
+      if (exists) return res.status(400).json({ error: "Email is already in use" });
+      fields.push("email=?");
+      params.push(email);
+    }
+    if (phone != null) { fields.push("phone=?"); params.push(String(phone).trim()); }
+    if (state != null) { fields.push("state=?"); params.push(String(state).trim()); }
+    if (residenceLGA != null) { fields.push("residenceLGA=?"); params.push(String(residenceLGA).trim()); }
+
+    if (fields.length === 0) return res.status(400).json({ error: "Nothing to update" });
 
     const pool = await getDbPool();
-    await pool.query(
-      `UPDATE Users SET phone=?, state=?, residenceLGA=?, nationality=?, dateOfBirth=?, eligibilityStatus=? WHERE id=?`,
-      [phone, state, residenceLGA, nationality, dateOfBirth, eligibilityStatus, req.user.id]
-    );
+    await pool.query(`UPDATE Users SET ${fields.join(", ")} WHERE id=?`, [...params, req.user.id]);
 
     const [[u]] = await pool.query(
-      `SELECT id, fullName, username, email, hasVoted, createdAt,
-              state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus
+      `SELECT id, fullName, username, email, hasVoted, state, nationality, dateOfBirth, residenceLGA, phone, eligibilityStatus, createdAt
        FROM Users WHERE id=?`,
       [req.user.id]
     );
-    return res.json({ success: true, user: u });
+
+    res.json({ success: true, user: { ...u, isAdmin: isAdminUser(u) } });
   } catch (e) {
-    console.error("auth/update-profile:", e);
-    return res.status(500).json({ error: "Failed to update profile" });
+    console.error("auth/profile PUT:", e);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+// Reset password (username + dob + phone)
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { username, dateOfBirth, phone, newPassword } = req.body || {};
+    if (!username || !dateOfBirth || !phone || !newPassword) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    const uname = String(username).toLowerCase().trim();
+
+    const pool = await getDbPool();
+    const [[u]] = await pool.query(
+      `SELECT id FROM Users WHERE LOWER(username)=? AND dateOfBirth=? AND phone=?`,
+      [uname, dateOfBirth, String(phone).trim()]
+    );
+    if (!u) return res.status(400).json({ error: "No matching user found" });
+
+    const hash = await bcrypt.hash(String(newPassword), 10);
+    await pool.query("UPDATE Users SET password=? WHERE id=?", [hash, u.id]);
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("auth/reset-password:", e);
+    res.status(500).json({ error: "Failed to reset password" });
   }
 });
 

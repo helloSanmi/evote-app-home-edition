@@ -2,50 +2,85 @@
 const express = require("express");
 const router = express.Router();
 const { getDbPool } = require("../db");
+const { requireAuth } = require("../middleware/auth");
 
-const withStatus = (row) => {
-  const now = Date.now();
-  const start = new Date(row.startTime).getTime();
-  const end = new Date(row.endTime).getTime();
-  let status = "upcoming";
-  if (row.forcedEnded || now >= end) status = "ended";
-  else if (now >= start && now < end) status = "active";
-  return { ...row, status };
-};
-
-// All periods (for /vote multi-session list)
-router.get("/periods", async (_req, res) => {
-  const pool = await getDbPool();
+/**
+ * GET /api/public/periods
+ * Returns all voting sessions (active/upcoming/ended) ordered by startTime desc.
+ * If you later add eligibility filtering, compute it here using req.user.
+ */
+router.get("/periods", requireAuth, async (req, res) => {
   try {
+    const pool = await getDbPool();
     const [rows] = await pool.query(
       `SELECT id, title, description, startTime, endTime, resultsPublished, forcedEnded
        FROM VotingPeriod
-       ORDER BY id DESC`
+       ORDER BY startTime DESC, id DESC`
     );
-    res.json(rows.map(withStatus));
+    res.json(rows || []);
   } catch (e) {
-    console.error("public/periods:", e);
+    console.error("GET /public/periods:", e);
     res.status(500).json({ error: "Failed to load periods" });
   }
 });
 
-// Candidates for a period (names/photos, no totals)
+/**
+ * GET /api/public/candidates?periodId=#
+ * Candidates for a specific period (for user voting UI).
+ */
 router.get("/candidates", async (req, res) => {
-  const periodId = Number(req.query.periodId);
-  if (!periodId) return res.status(400).json({ error: "periodId required" });
-  const pool = await getDbPool();
   try {
+    const periodId = Number(req.query.periodId);
+    if (!periodId) return res.status(400).json({ error: "periodId required" });
+    const pool = await getDbPool();
     const [rows] = await pool.query(
-      `SELECT id, name, state, photoUrl
+      `SELECT id, name, state, lga, photoUrl, votes
        FROM Candidates
-       WHERE periodId=?
-       ORDER BY name ASC`,
+       WHERE periodId = ?
+       ORDER BY id ASC`,
       [periodId]
     );
-    res.json(rows);
+    res.json(rows || []);
   } catch (e) {
-    console.error("public/candidates:", e);
+    console.error("GET /public/candidates:", e);
     res.status(500).json({ error: "Failed to load candidates" });
+  }
+});
+
+/**
+ * GET /api/public/results?periodId=#
+ * Returns results if the user participated in this period and results are published.
+ */
+router.get("/results", requireAuth, async (req, res) => {
+  try {
+    const periodId = Number(req.query.periodId);
+    if (!periodId) return res.status(400).json({ error: "periodId required" });
+
+    const pool = await getDbPool();
+
+    const [[period]] = await pool.query(
+      `SELECT id, title, description, startTime, endTime, resultsPublished
+       FROM VotingPeriod WHERE id=?`, [periodId]
+    );
+    if (!period) return res.status(404).json({ error: "Period not found" });
+    if (!period.resultsPublished) return res.status(403).json({ error: "Results not published yet" });
+
+    // must have participated
+    const [[voted]] = await pool.query(
+      `SELECT id FROM Votes WHERE userId=? AND periodId=? LIMIT 1`, [req.user.id, periodId]
+    );
+    if (!voted) return res.status(403).json({ error: "You didn’t participate in this session" });
+
+    const [cands] = await pool.query(
+      `SELECT id, name, state, lga, photoUrl, votes
+       FROM Candidates WHERE periodId=? ORDER BY votes DESC, id ASC`,
+      [periodId]
+    );
+
+    res.json({ period, candidates: cands || [] });
+  } catch (e) {
+    console.error("GET /public/results:", e);
+    res.status(500).json({ error: "Failed to load results" });
   }
 });
 

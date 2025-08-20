@@ -12,9 +12,7 @@ export default function Navbar() {
   useEffect(() => {
     setMounted(true);
     const sync = () => {
-      const raw = localStorage.getItem("isAdmin");
-      const admin = raw === "true" || raw === "1";
-      setIsAdmin(admin);
+      setIsAdmin(localStorage.getItem("isAdmin") === "true");
       setLoggedIn(!!localStorage.getItem("token"));
     };
     sync();
@@ -36,7 +34,9 @@ export default function Navbar() {
   const item = (href, label) => (
     <Link
       href={href}
-      className={`px-3 py-1 rounded transition hover:bg-gray-100 ${router.pathname === href ? "bg-gray-200 font-semibold" : ""}`}
+      className={`px-3 py-1 rounded transition hover:bg-gray-100 ${
+        router.pathname === href ? "bg-gray-200 font-semibold" : ""
+      }`}
     >
       {label}
     </Link>
@@ -64,15 +64,15 @@ export default function Navbar() {
           {isAdmin ? (
             <>
               {item("/admin", "Admin")}
-              {item("/faq", "FAQ")}
-              <button onClick={signOut} className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition">Sign out</button>
+              <button onClick={signOut} className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition">
+                Sign out
+              </button>
             </>
           ) : (
             <>
               {loggedIn && item("/vote", "Vote")}
               {loggedIn && item("/results", "Results")}
               {loggedIn && item("/profile", "Profile")}
-              {item("/faq", "FAQ")}
               {!loggedIn && item("/login", "Login")}
               {!loggedIn && item("/register", "Register")}
               {loggedIn && (

@@ -1,64 +1,79 @@
 // backend/middleware/auth.js
 const jwt = require("jsonwebtoken");
+const { getDbPool } = require("../db");
 
 /**
- * Parse "ADMIN_USERS" (comma-separated usernames or emails).
- * Example: ADMIN_USERS="admin, root, boss@mail.com"
+ * Auth: verifies JWT and attaches req.user = { id, userId, username, email, isAdmin? }
  */
-function getEnvAdmins() {
-  return (process.env.ADMIN_USERS || "")
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = {
+      id: payload.userId ?? payload.id,
+      userId: payload.userId ?? payload.id,
+      username: payload.username || null,
+      email: payload.email || null,
+      isAdmin: !!payload.isAdmin,
+    };
+    return next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+/**
+ * Build normalized admin allowlist from ADMIN_USERNAMES (comma-separated)
+ */
+function adminList() {
+  return String(process.env.ADMIN_USERNAMES || "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
 
-function isListedAdmin(user) {
-  if (!user) return false;
-  const list = getEnvAdmins();
-  const uname = (user.username || "").toLowerCase();
-  const email = (user.email || "").toLowerCase();
-  return list.includes(uname) || list.includes(email);
-}
-
 /**
- * requireAuth — verifies JWT and sets req.user
- * Accepts: Authorization: Bearer <token>
- * Token payload should at least include: { id, username, email, isAdmin? }
+ * Admin gate:
+ * - Checks token username/email against ADMIN_USERNAMES
+ * - If missing in token, fetches from DB by userId
  */
-function requireAuth(req, res, next) {
+async function requireAdmin(req, res, next) {
   try {
-    const hdr = req.headers.authorization || "";
-    const parts = hdr.split(" ");
-    if (parts.length !== 2 || parts[0] !== "Bearer") {
-      return res.status(401).json({ error: "Unauthorized" });
+    const list = adminList();
+    if (list.length === 0) {
+      return res.status(403).json({ error: "Forbidden (admin only)" });
     }
-    const token = parts[1];
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    // normalize user obj on req
-    req.user = {
-      id: payload.id,
-      username: payload.username,
-      email: payload.email,
-      // honor token flag OR env list
-      isAdmin: !!payload.isAdmin || isListedAdmin(payload),
-    };
+
+    const handles = [];
+    if (req.user?.username) handles.push(req.user.username.toLowerCase());
+    if (req.user?.email) handles.push(req.user.email.toLowerCase());
+
+    if (handles.length === 0 && req.user?.id) {
+      try {
+        const pool = await getDbPool();
+        const [[u]] = await pool.query(
+          "SELECT username, email FROM Users WHERE id = ?",
+          [req.user.id]
+        );
+        if (u) {
+          if (u.username) handles.push(String(u.username).toLowerCase());
+          if (u.email) handles.push(String(u.email).toLowerCase());
+        }
+      } catch {
+        // ignore db fallback errors; we'll just deny if no match
+      }
+    }
+
+    const ok = handles.some((h) => list.includes(h));
+    if (!ok) return res.status(403).json({ error: "Forbidden (admin only)" });
+
     return next();
-  } catch (e) {
-    return res.status(401).json({ error: "Unauthorized" });
+  } catch {
+    return res.status(403).json({ error: "Forbidden (admin only)" });
   }
 }
 
-/**
- * requireAdmin — must be authed AND admin.
- * Uses req.user.isAdmin set by requireAuth (token flag or env list).
- */
-function requireAdmin(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-  if (!req.user.isAdmin) return res.status(403).json({ error: "Forbidden" });
-  return next();
-}
-
-module.exports = {
-  requireAuth,
-  requireAdmin,
-};
+module.exports = { requireAuth, requireAdmin };

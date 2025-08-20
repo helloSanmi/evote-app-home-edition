@@ -55,17 +55,21 @@ export default function Login() {
           <div>
             <label className="block text-sm text-gray-700 mb-1">Username or Email</label>
             <input className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-                   value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="johndoe or john@mail.com" />
+              value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="johndoe or john@mail.com" />
           </div>
           <div>
             <label className="block text-sm text-gray-700 mb-1">Password</label>
             <input type="password" className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-                   value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
           </div>
           <button disabled={busy}
-                  className="w-full bg-blue-600 text-white rounded py-3 font-semibold transition hover:bg-blue-700 disabled:opacity-50">
+            className="w-full bg-blue-600 text-white rounded py-3 font-semibold transition hover:bg-blue-700 disabled:opacity-50">
             {busy ? "Signing in…" : "Sign In"}
           </button>
+          <p className="text-center mt-3 text-sm">
+            <a href="/reset-password" className="text-blue-600 hover:underline">Forgot password?</a>
+          </p>
+
         </form>
       </div>
     </div>

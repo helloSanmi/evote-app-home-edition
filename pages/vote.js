@@ -1,223 +1,199 @@
 // frontend/pages/vote.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import io from "socket.io-client";
 import { notifyError, notifySuccess } from "../components/Toast";
-import { useModal } from "../components/Modal";
-
-const API = process.env.NEXT_PUBLIC_API_URL;
+import { api, safeJson } from "../lib/apiBase";
 
 export default function Vote() {
   const router = useRouter();
-  const { open } = useModal();
   const token = useMemo(() => (typeof window !== "undefined" ? localStorage.getItem("token") : null), []);
-  const [sessions, setSessions] = useState([]);          // all periods
-  const [myVote, setMyVote] = useState({});              // periodId -> {id,name}
-  const [cands, setCands] = useState({});                // periodId -> candidates[]
-  const [sel, setSel] = useState({});                    // periodId -> candidateId
+  const auth = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
+
+  const [sessions, setSessions] = useState([]);
+  const [statusBy, setStatusBy] = useState({});
+  const [candsBy, setCandsBy] = useState({});
+  const [selectedBy, setSelectedBy] = useState({});
   const [loading, setLoading] = useState(true);
-  const tickRef = useRef(null);
-  const sock = useRef(null);
+
+  const tick = useRef(null);
+  const refresher = useRef(null);
 
   useEffect(() => {
     if (!token) { router.replace("/login"); return; }
-    loadAll().finally(() => setLoading(false));
-    tickRef.current = setInterval(() => setSessions((s) => [...s]), 1000); // re-render for countdowns
-    // socket for result publish popup
-    sock.current = io(API, { transports: ["websocket", "polling"] });
-    sock.current.on("resultsPublished", ({ periodId }) => {
-      const p = sessions.find((x) => x.id === periodId);
-      open({
-        title: "Results Published",
-        message: `Results for “${p?.title || `Session #${periodId}`}` + "” are now available.",
-        confirmText: "View Results",
-        onConfirm: () => router.push(`/results?periodId=${periodId}`),
-        onCancel: () => {}, // blocks until user clicks one
-        cancelText: "Close",
-      });
-    });
-    return () => {
-      clearInterval(tickRef.current);
-      sock.current?.disconnect();
-    };
+    (async () => { await loadAll(); setLoading(false); })();
+
+    refresher.current = setInterval(loadAll, 10000);
+    tick.current = setInterval(checkEdges, 1000);
+
+    return () => { clearInterval(tick.current); clearInterval(refresher.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, router]);
+  }, [token]);
 
-  const timeUntil = (p) => {
-    const diff = new Date(p.startTime).getTime() - Date.now();
-    if (diff <= 0) return "";
-    const secs = Math.floor(diff / 1000);
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = secs % 60;
-    return `${h}h ${m}m ${s}s`;
-  };
+  function checkEdges() {
+    const now = Date.now();
+    sessions.forEach(s => {
+      const start = new Date(s.startTime).getTime();
+      if (now >= start && (statusBy[s.id]?.status === "upcoming")) {
+        refreshSession(s.id);
+      }
+    });
+  }
 
-  const loadAll = async () => {
+  async function loadAll() {
     try {
-      const pr = await fetch(`${API}/api/public/periods`);
-      const periods = await pr.json();
-      const list = Array.isArray(periods) ? periods : [];
+      const pr = await fetch(api("/api/public/periods"), { headers: auth });
+      const listRaw = await safeJson(pr);
+      const list = Array.isArray(listRaw) ? listRaw : (Array.isArray(listRaw?.sessions) ? listRaw.sessions : []);
       setSessions(list);
-      // For each, load status & candidates
-      for (const p of list) {
-        // vote status
-        const sr = await fetch(`${API}/api/vote/status?periodId=${p.id}`, { headers: { Authorization: `Bearer ${token}` } });
-        const s = await sr.json();
-        if (sr.ok && s?.youVoted) setMyVote((st) => ({ ...st, [p.id]: s.youVoted }));
-        // candidates only if active and not voted
-        if (p.status === "active" && !(s?.hasVoted)) {
-          const cr = await fetch(`${API}/api/public/candidates?periodId=${p.id}`);
-          const cs = await cr.json();
-          if (cr.ok) setCands((st) => ({ ...st, [p.id]: Array.isArray(cs) ? cs : [] }));
-        }
+
+      await Promise.all(list.map(async (p) => {
+        await refreshSession(p.id);
+      }));
+    } catch (e) {
+      console.error("loadAll:", e);
+      notifyError("Failed to load sessions");
+      setSessions([]);
+    }
+  }
+
+  async function refreshSession(pid) {
+    try {
+      const s = await fetch(api(`/api/vote/status?periodId=${pid}`), { headers: auth }).then(safeJson);
+      setStatusBy(prev => ({ ...prev, [pid]: s || {} }));
+      if ((s?.status === "active") && !s?.hasVoted) {
+        const cr = await fetch(api(`/api/public/candidates?periodId=${pid}`)).then(safeJson);
+        setCandsBy(prev => ({ ...prev, [pid]: Array.isArray(cr) ? cr : [] }));
+      } else {
+        setCandsBy(prev => ({ ...prev, [pid]: [] }));
       }
     } catch {
-      notifyError("Failed to load sessions");
+      // keep previous state
     }
-  };
+  }
 
-  const castVote = async (periodId) => {
-    const candId = sel[periodId];
-    if (!candId) return notifyError("Select a candidate");
+  async function cast(pid) {
+    const candidateId = selectedBy[pid];
+    if (!candidateId) return notifyError("Select a candidate");
     try {
-      const res = await fetch(`${API}/api/vote`, {
+      const res = await fetch(api("/api/vote"), {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ candidateId: candId }),
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateId, periodId: pid }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) return notifyError(data.error || "Error casting vote");
-      setMyVote((s) => ({ ...s, [periodId]: { id: data.candidateId, name: data.candidateName } }));
-      setCands((s) => ({ ...s, [periodId]: [] })); // lock
+      const data = await safeJson(res);
+      if (!res.ok || !data?.success) return notifyError(data?.error || "Error casting vote");
       notifySuccess(`You voted for ${data.candidateName}`);
+      await refreshSession(pid);
     } catch {
       notifyError("Error casting vote");
     }
-  };
+  }
 
-  const renderCard = (p) => {
-    const voted = myVote[p.id];
-    const list = cands[p.id] || [];
-    const status = p.status;
-    return (
-      <div key={p.id} className="border rounded-2xl bg-white p-5 hover:shadow transition">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-bold">{p.title || `Session #${p.id}`}</div>
-            {p.description && <div className="text-gray-600">{p.description}</div>}
-            <div className="text-xs text-gray-500">
-              {new Date(p.startTime).toLocaleString()} — {new Date(p.endTime).toLocaleString()}
-            </div>
-          </div>
-          <span className={`text-xs px-2 py-1 rounded ${status === "active" ? "bg-green-100 text-green-800" : status === "ended" ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"}`}>
-            {status === "active" ? "Active" : status === "ended" ? "Ended" : "Upcoming"}
-          </span>
-        </div>
+  function timeUntil(s) {
+    const diff = new Date(s.startTime).getTime() - Date.now();
+    if (diff <= 0) return "";
+    const sec = Math.floor(diff / 1000);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s2 = sec % 60;
+    return `${h}h ${m}m ${s2}s`;
+  }
 
-        {/* Upcoming */}
-        {status === "upcoming" && (
-          <div className="mt-3 p-3 rounded bg-blue-50 border">
-            <div className="font-semibold">Voting starts in:</div>
-            <div className="text-2xl font-extrabold mt-1">{timeUntil(p)}</div>
-          </div>
-        )}
-
-        {/* Ended */}
-        {status === "ended" && (
-          <div className="mt-3 p-3 rounded bg-amber-50 border flex items-center justify-between">
-            {p.resultsPublished ? (
-              <>
-                <span>Voting ended. Results are published.</span>
-                <button
-                  onClick={() => router.push(`/results?periodId=${p.id}`)}
-                  className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
-                >
-                  View Results
-                </button>
-              </>
-            ) : (
-              <span>Voting ended. Awaiting results.</span>
-            )}
-          </div>
-        )}
-
-        {/* Your vote */}
-        {voted && (
-          <div className="mt-3 p-3 rounded bg-green-50 border">
-            You voted for <span className="font-semibold">{voted.name}</span>.
-          </div>
-        )}
-
-        {/* Active voting */}
-        {status === "active" && !voted && (
-          <>
-            <h3 className="text-sm font-semibold mt-4 mb-2">Choose your candidate</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {list.map((c) => {
-                const isSel = sel[p.id] === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => setSel((s) => ({ ...s, [p.id]: c.id }))}
-                    className={`border rounded p-3 text-center transition transform hover:-translate-y-0.5 hover:shadow ${
-                      isSel ? "ring-2 ring-blue-600 border-blue-600" : "border-gray-300"
-                    }`}
-                  >
-                    <img
-                      src={c.photoUrl || "/placeholder.png"}
-                      className={`w-24 h-24 rounded-full mx-auto object-cover mb-2 transition transform ${isSel ? "scale-105" : "hover:scale-105"}`}
-                      alt={c.name}
-                    />
-                    <div className="font-semibold">{c.name}</div>
-                    <div className="text-sm text-gray-600">{c.state || "-"}</div>
-                    {isSel && <div className="mt-1 text-blue-700 font-medium">Selected</div>}
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              onClick={() => castVote(p.id)}
-              disabled={!sel[p.id]}
-              className="mt-4 bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50 transition hover:bg-green-700"
-            >
-              Submit Vote
-            </button>
-          </>
-        )}
-      </div>
-    );
-  };
-
-  if (loading) return <div className="max-w-6xl mx-auto bg-white rounded-xl shadow p-6 mt-6 animate-pulse">Loading…</div>;
-
-  const activeOrUpcoming = sessions.filter((p) => p.status !== "ended");
-  const endedList = sessions.filter((p) => p.status === "ended");
+  if (loading) return <div className="max-w-5xl mx-auto bg-white rounded-xl shadow p-6 mt-6 animate-pulse">Loading…</div>;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 mt-6 space-y-6">
-      {activeOrUpcoming.length === 0 && (
-        <div className="bg-white rounded-xl shadow p-6">
-          There is no active voting session.{" "}
-          <button className="text-indigo-700 underline" onClick={() => router.push("/results")}>
-            Go to Results
-          </button>{" "}
-          to view results of sessions you participated in when they’re published.
+    <div className="max-w-5xl mx-auto px-4">
+      {sessions.length === 0 ? (
+        <div className="bg-white rounded-xl shadow p-6 mt-6">
+          <div className="font-semibold mb-1">No voting session available right now.</div>
+          <div className="text-sm text-gray-600">Check back later or watch your notifications.</div>
         </div>
-      )}
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          {sessions.map(s => {
+            const st = statusBy[s.id] || {};
+            const cands = candsBy[s.id] || [];
+            const sel = selectedBy[s.id] || null;
 
-      {activeOrUpcoming.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {activeOrUpcoming.map(renderCard)}
-        </div>
-      )}
+            return (
+              <div key={s.id} className="bg-white rounded-2xl shadow-sm ring-1 ring-gray-100 p-5">
+                <div className="font-semibold">{s.title || `Session #${s.id}`}</div>
+                {s.description && <div className="text-sm text-gray-600">{s.description}</div>}
+                <div className="text-xs text-gray-600 mb-2">
+                  {new Date(s.startTime).toLocaleString()} — {new Date(s.endTime).toLocaleString()}
+                </div>
 
-      {endedList.length > 0 && (
-        <div className="bg-white rounded-xl shadow p-6">
-          <h3 className="text-lg font-bold mb-3">Recently Ended</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {endedList.slice(0, 4).map(renderCard)}
-          </div>
+                {st.status === "upcoming" && (
+                  <div className="p-3 rounded bg-blue-50 border mb-3">
+                    <div className="text-sm font-medium">Starts in:</div>
+                    <div className="text-xl font-extrabold">{timeUntil(s)}</div>
+                  </div>
+                )}
+
+                {st.status === "ended" && (
+                  <div className="p-3 rounded bg-amber-50 border mb-3 text-sm">
+                    {s.resultsPublished ? (
+                      <div className="flex items-center justify-between">
+                        <span>Voting ended. Results are published.</span>
+                        <button
+                          onClick={() => router.push(`/results?periodId=${s.id}`)}
+                          className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                        >
+                          View Results
+                        </button>
+                      </div>
+                    ) : (
+                      <span>Voting ended. Awaiting results.</span>
+                    )}
+                  </div>
+                )}
+
+                {st.youVoted && (
+                  <div className="p-2 rounded bg-green-50 border text-sm mb-2">
+                    You voted for <span className="font-semibold">{st.youVoted.name}</span>.
+                  </div>
+                )}
+
+                {st.status === "active" && !st.hasVoted ? (
+                  <>
+                    <div className="text-sm font-medium mb-2">Choose your candidate</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {cands.map(c => {
+                        const isSel = sel === c.id;
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => setSelectedBy(prev => ({ ...prev, [s.id]: c.id }))}
+                            className={`border rounded p-3 text-left transition ${isSel ? "ring-2 ring-blue-600 border-blue-600" : "hover:shadow"}`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={c.photoUrl ? api(c.photoUrl) : "/placeholder.png"}
+                                className={`w-14 h-14 rounded object-cover ${isSel ? "scale-105" : ""}`}
+                                alt={c.name}
+                              />
+                              <div>
+                                <div className="font-semibold">{c.name}</div>
+                                <div className="text-xs text-gray-600">{c.state || "-"} • {c.lga || "-"}</div>
+                              </div>
+                            </div>
+                            {isSel && <div className="mt-1 text-blue-700 text-sm font-medium">Selected</div>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={() => cast(s.id)}
+                      disabled={!sel}
+                      className="mt-3 bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50 hover:bg-green-700"
+                    >
+                      Submit Vote
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

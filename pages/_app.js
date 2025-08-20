@@ -2,10 +2,9 @@
 import "../styles/globals.css";
 import Layout from "../components/Layout";
 import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
-import Head from "next/head";   // ✅ import Head
-
 
 export default function MyApp({ Component, pageProps }) {
   const router = useRouter();
@@ -19,32 +18,25 @@ export default function MyApp({ Component, pageProps }) {
 
   return (
     <Layout>
-      <Head>
-        {/* 👇 use PNG favicon */}
-        <link rel="icon" type="image/png" href="../favicon.png" />
-        <title>Voting App</title>
-      </Head>
       <div key={routeKey} className="page-anim">
         <Component {...pageProps} />
       </div>
-      <ToastContainer />
+
+      <ToastContainer newestOnTop />
+
       <style jsx global>{`
-        .page-anim {
-          animation: fadeScale 240ms ease-out;
-        }
+        .page-anim { animation: fadeScale 220ms ease-out; }
         @keyframes fadeScale {
-          0% {
-            opacity: 0;
-            transform: translateY(8px) scale(0.98);
-          }
-          100% {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
+          0% { opacity: 0; transform: translateY(8px) scale(0.985); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
         }
+        /* Toastify tweak: larger centered cards */
+        .Toastify__toast-container { z-index: 9999; }
+        .Toastify__toast { border-radius: 14px; }
+        .Toastify__toast--success { background: #16a34a; }
+        .Toastify__toast--error { background: #dc2626; }
+        .Toastify__toast--info { background: #2563eb; }
       `}</style>
     </Layout>
-    
   );
 }
-

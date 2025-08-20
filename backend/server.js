@@ -2,59 +2,56 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { getDbPool } = require("./db");
 const http = require("http");
 const { Server } = require("socket.io");
+const path = require("path");
+const { getDbPool } = require("./db");
+const logger = require("./middleware/logger");
 
 const app = express();
+app.set("trust proxy", true);
 
-const allowedOrigins = (process.env.CORS_ORIGINS || "")
-  .split(/[,\s]+/)
-  .map((x) => x.trim())
-  .filter(Boolean);
-if (allowedOrigins.length === 0) {
-  allowedOrigins.push("http://localhost:3000", "https://vote.techanalytics.org");
-}
+const allowedOrigins = [
+  "https://vote.techanalytics.org",
+  "http://localhost:3000",
+];
 
 app.use(
   cors({
     origin: function (origin, cb) {
       if (!origin) return cb(null, true);
       if (!allowedOrigins.includes(origin)) {
-        return cb(new Error("Not allowed by CORS"), false);
+        return cb(new Error("Blocked by CORS"), false);
       }
-      return cb(null, true);
+      cb(null, true);
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: false,
   })
 );
 
 app.disable("x-powered-by");
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(logger);
 
-// Health/root
-app.get("/api", (_req, res) => res.status(200).json({ ok: true, service: "voting-backend" }));
+// Serve uploaded images directly (makes <img src="/uploads/xyz.png"> work too)
+app.use("/uploads", express.static(path.join(__dirname, "uploads"), { maxAge: "7d" }));
 
-// Routes
+app.get("/api", (_req, res) => res.json({ ok: true, service: "voting-backend" }));
+
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/vote", require("./routes/vote"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/public", require("./routes/public"));
-app.use("/api/user", require("./routes/user")); // <-- NEW
 
-// Socket.io
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: allowedOrigins, methods: ["GET", "POST"] },
-});
+const io = new Server(server, { cors: { origin: allowedOrigins, methods: ["GET", "POST"] } });
+
 const emitUpdate = (eventName, data) => io.emit(eventName, data || {});
 app.set("socketio", io);
 app.set("emitUpdate", emitUpdate);
 
-// Start
 getDbPool().then(() => {
   const HOST = process.env.HOST || "0.0.0.0";
-  const PORT = Number(process.env.PORT || 5000);
+  const PORT = process.env.PORT || 5050;
   server.listen(PORT, HOST, () => console.log(`Server running on http://${HOST}:${PORT}`));
 });
