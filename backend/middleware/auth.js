@@ -1,79 +1,41 @@
-// backend/middleware/auth.js
 const jwt = require("jsonwebtoken");
-const { getDbPool } = require("../db");
 
-/**
- * Auth: verifies JWT and attaches req.user = { id, userId, username, email, isAdmin? }
- */
-function requireAuth(req, res, next) {
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
+const toList = (s) => (s || "").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+const ADMIN_USERNAMES = new Set(toList(process.env.ADMIN_USERNAMES));
+const ADMIN_EMAILS    = new Set(toList(process.env.ADMIN_EMAILS));
 
+function decodeAuth(req) {
+  const h = req.headers.authorization || "";
+  const m = /^Bearer\s+(.+)/i.exec(h);
+  return m ? m[1] : null;
+}
+
+exports.attachUserIfAny = (req, _res, next) => {
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = {
-      id: payload.userId ?? payload.id,
-      userId: payload.userId ?? payload.id,
-      username: payload.username || null,
-      email: payload.email || null,
-      isAdmin: !!payload.isAdmin,
-    };
-    return next();
-  } catch {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
+    const tok = decodeAuth(req);
+    if (!tok) return next();
+    const u = jwt.verify(tok, process.env.JWT_SECRET);
+    req.user = { id: u.id, username: u.username, email: u.email };
+  } catch {}
+  next();
+};
 
-/**
- * Build normalized admin allowlist from ADMIN_USERNAMES (comma-separated)
- */
-function adminList() {
-  return String(process.env.ADMIN_USERNAMES || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-/**
- * Admin gate:
- * - Checks token username/email against ADMIN_USERNAMES
- * - If missing in token, fetches from DB by userId
- */
-async function requireAdmin(req, res, next) {
+exports.requireAuth = (req, res, next) => {
+  const tok = decodeAuth(req);
+  if (!tok) return res.status(401).json({ error: "UNAUTHORIZED" });
   try {
-    const list = adminList();
-    if (list.length === 0) {
-      return res.status(403).json({ error: "Forbidden (admin only)" });
-    }
-
-    const handles = [];
-    if (req.user?.username) handles.push(req.user.username.toLowerCase());
-    if (req.user?.email) handles.push(req.user.email.toLowerCase());
-
-    if (handles.length === 0 && req.user?.id) {
-      try {
-        const pool = await getDbPool();
-        const [[u]] = await pool.query(
-          "SELECT username, email FROM Users WHERE id = ?",
-          [req.user.id]
-        );
-        if (u) {
-          if (u.username) handles.push(String(u.username).toLowerCase());
-          if (u.email) handles.push(String(u.email).toLowerCase());
-        }
-      } catch {
-        // ignore db fallback errors; we'll just deny if no match
-      }
-    }
-
-    const ok = handles.some((h) => list.includes(h));
-    if (!ok) return res.status(403).json({ error: "Forbidden (admin only)" });
-
-    return next();
+    const u = jwt.verify(tok, process.env.JWT_SECRET);
+    req.user = { id: u.id, username: u.username, email: u.email };
+    next();
   } catch {
-    return res.status(403).json({ error: "Forbidden (admin only)" });
+    res.status(401).json({ error: "UNAUTHORIZED" });
   }
-}
+};
 
-module.exports = { requireAuth, requireAdmin };
+exports.requireAdmin = (req, res, next) => {
+  const u = req.user || {};
+  const ok = (u.username && ADMIN_USERNAMES.has(u.username.toLowerCase()))
+          || (u.email && ADMIN_EMAILS.has(u.email.toLowerCase()));
+  if (!ok) return res.status(403).json({ error: "FORBIDDEN" });
+  next();
+};

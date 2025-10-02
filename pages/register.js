@@ -1,196 +1,215 @@
-// frontend/pages/register.js
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/router";
+// pages/register.js
+import { useMemo, useState } from "react";
+import NG from "../public/ng-states-lgas.json";
 import { notifyError, notifySuccess } from "../components/Toast";
-import { api, safeJson } from "../lib/apiBase";
+import { api } from "../lib/apiBase";
+
+function toList(json) {
+  const states = Object.keys(json || {});
+  return states.map((s) => ({ state: s, lgas: json[s] || [] }));
+}
 
 export default function Register() {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-
-  // form
+  const base = useMemo(() => toList(NG), []);
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [password2, setPassword2] = useState("");
-  const [phone, setPhone] = useState("");
   const [state, setState] = useState("");
-  const [lga, setLga] = useState("");
+  const [residenceLGA, setLGA] = useState("");
+  const [phone, setPhone] = useState("");
   const [nationality, setNationality] = useState("Nigerian");
-  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [dateOfBirth, setDOB] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  // states → lgas mapping (fetched)
-  const [map, setMap] = useState({});
-  const states = useMemo(() => Object.keys(map).sort(), [map]);
-  const lgas = useMemo(() => (state ? (map[state] || []).sort() : []), [map, state]);
+  const lgas = base.find((x) => x.state === state)?.lgas || [];
 
-  useEffect(() => {
-    if (localStorage.getItem("token")) router.replace("/");
-  }, [router]);
-
-  // load mapping (tries local, then remote)
-  useEffect(() => {
-    (async () => {
-      try {
-        // optional local file if you add one at /public/ng-states-lgas.json
-        const r1 = await fetch("/ng-states-lgas.json");
-        if (r1.ok) {
-          setMap(await r1.json());
-          return;
-        }
-        throw new Error();
-      } catch {
-        try {
-          // fallback remote (public dataset)
-          const r2 = await fetch("../public/ng.states.lgas.json");
-          if (r2.ok) {
-            setMap(await r2.json());
-            return;
-          }
-          throw new Error();
-        } catch {
-          // minimal fallback to avoid breaking UI
-          setMap({
-            "Abuja (FCT)": ["Abaji", "Abuja Municipal", "Bwari", "Gwagwalada", "Kuje", "Kwali"],
-            Lagos: ["Agege","Ajeromi-Ifelodun","Alimosho","Amuwo-Odofin","Apapa","Badagry","Epe","Eti-Osa","Ibeju-Lekki","Ifako-Ijaiye","Ikeja","Ikorodu","Kosofe","Lagos Island","Lagos Mainland","Mushin","Ojo","Oshodi-Isolo","Shomolu","Surulere"]
-          });
-        }
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    // reset LGA if state changes
-    setLga("");
-  }, [state]);
-
-  const submit = async (e) => {
+  async function submit(e) {
     e.preventDefault();
-    if (!fullName || !username || !email || !password || !password2 || !phone || !state || !lga || !nationality || !dateOfBirth) {
-      return notifyError("Please fill in all fields");
-    }
-    if (password !== password2) return notifyError("Passwords do not match");
-
     setBusy(true);
     try {
-      const res = await fetch(api("/api/auth/register"), {
+      const res = await fetch(`${api}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fullName: fullName.trim(),
-          username: username.trim().toLowerCase(),   // force lowercase
-          email: email.trim(),
+          fullName,
+          username,
+          email,
           password,
-          phone: phone.trim(),
           state,
-          residenceLGA: lga,
+          residenceLGA,
+          phone,
           nationality,
           dateOfBirth,
         }),
       });
-      const data = await safeJson(res);
-      if (!res.ok) throw new Error(data?.error || "Registration failed");
-      notifySuccess("Account created — please sign in");
-      router.replace("/login");
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error?.message || j?.message || "Registration failed");
+      notifySuccess("Account created. Please sign in.");
+      window.location.replace("/login");
     } catch (e2) {
-      notifyError(e2.message || "Registration failed");
+      notifyError(e2.message);
     } finally {
       setBusy(false);
     }
-  };
+  }
 
   return (
-    <div className="max-w-2xl mx-auto px-4">
-      <div className="bg-white rounded-2xl shadow p-8 mt-10 transition hover:shadow-lg">
-        <h1 className="text-2xl font-bold text-center mb-2">Create your account</h1>
-        <p className="text-center text-gray-600 mb-6">Join <span className="text-blue-700 font-semibold">E-Voting</span></p>
-
-        <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Full Name" value={fullName} onChange={setFullName} required placeholder="Jane Doe" />
-          <Field label="Username" value={username} onChange={(v)=>setUsername(v.toLowerCase())} required placeholder="janedoe" />
-
-          <Field type="email" label="Email" value={email} onChange={setEmail} required placeholder="jane@mail.com" />
-          <Field type="tel" label="Phone" value={phone} onChange={setPhone} required placeholder="080..." />
-
-          {/* State */}
-          <div>
-            <label className="block text-sm text-gray-700 mb-1">State</label>
-            <select
-              className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-              value={state}
-              onChange={(e) => setState(e.target.value)}
-              required
-            >
-              <option value="">Select state…</option>
-              {states.map((s) => (
-                <option key={s} value={s}>{s}</option>
+    <div className="mx-auto w-full max-w-5xl">
+      <div className="card">
+        <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+          <div className="md:max-w-sm">
+            <h1 className="text-3xl font-semibold text-slate-900">Create your voter profile</h1>
+            <p className="mt-3 text-sm text-slate-500">
+              Complete the information below so we can verify eligibility and match you with the right elections.
+            </p>
+            <ul className="mt-6 space-y-3 text-sm text-slate-600">
+              {[
+                "Use your legal name to match government records.",
+                "We'll only contact you regarding election updates.",
+                "You can update your profile details at any time.",
+              ].map((tip) => (
+                <li key={tip} className="flex items-start gap-2">
+                  <span className="mt-1 h-2 w-2 rounded-full bg-blue-500" />
+                  <span>{tip}</span>
+                </li>
               ))}
-            </select>
+            </ul>
           </div>
 
-          {/* LGA */}
-          <div>
-            <label className="block text-sm text-gray-700 mb-1">LGA</label>
-            <select
-              className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-              value={lga}
-              onChange={(e) => setLga(e.target.value)}
-              required
-              disabled={!state}
-            >
-              <option value="">{state ? "Select LGA…" : "Select state first"}</option>
-              {lgas.map((g) => (
-                <option key={g} value={g}>{g}</option>
-              ))}
-            </select>
-          </div>
+          <form onSubmit={submit} className="flex-1 space-y-5">
+            <div>
+              <label className="form-label" htmlFor="fullName">Full name</label>
+              <input
+                id="fullName"
+                className="form-control"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Jane Doe"
+              />
+            </div>
 
-          {/* Nationality */}
-          <div>
-            <label className="block text-sm text-gray-700 mb-1">Nationality</label>
-            <select
-              className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-              value={nationality}
-              onChange={(e) => setNationality(e.target.value)}
-              required
-            >
-              <option value="Nigerian">Nigerian</option>
-              <option value="Other">Other</option>
-            </select>
-          </div>
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="username">Username</label>
+                <input
+                  id="username"
+                  className="form-control"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="janedoe"
+                  autoComplete="username"
+                />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="email">Email</label>
+                <input
+                  id="email"
+                  type="email"
+                  className="form-control"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="jane@email.com"
+                  autoComplete="email"
+                />
+              </div>
+            </div>
 
-          <Field type="date" label="Date of Birth" value={dateOfBirth} onChange={setDateOfBirth} required />
+            <div>
+              <label className="form-label" htmlFor="password">Password</label>
+              <input
+                id="password"
+                type="password"
+                className="form-control"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Create a strong password"
+                autoComplete="new-password"
+              />
+            </div>
 
-          <Field type="password" label="Password" value={password} onChange={setPassword} required />
-          <Field type="password" label="Confirm Password" value={password2} onChange={setPassword2} required />
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="state">State of residence</label>
+                <select
+                  id="state"
+                  className="form-control"
+                  value={state}
+                  onChange={(e) => {
+                    setState(e.target.value);
+                    setLGA("");
+                  }}
+                >
+                  <option value="">Select state…</option>
+                  {base.map((x) => (
+                    <option key={x.state} value={x.state}>
+                      {x.state}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="form-label" htmlFor="lga">LGA of residence</label>
+                <select
+                  id="lga"
+                  className="form-control"
+                  value={residenceLGA}
+                  onChange={(e) => setLGA(e.target.value)}
+                  disabled={!state}
+                >
+                  <option value="">{state ? "Select LGA…" : "Pick state first"}</option>
+                  {lgas.map((l) => (
+                    <option key={l} value={l}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
-          <div className="md:col-span-2">
-            <button
-              disabled={busy}
-              className="w-full bg-green-600 text-white rounded py-3 font-semibold transition hover:bg-green-700 disabled:opacity-50"
-            >
-              {busy ? "Creating…" : "Create Account"}
-            </button>
-          </div>
-        </form>
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="phone">Phone</label>
+                <input
+                  id="phone"
+                  className="form-control"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="0800 000 0000"
+                  autoComplete="tel"
+                />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="nationality">Nationality</label>
+                <input
+                  id="nationality"
+                  className="form-control"
+                  value={nationality}
+                  onChange={(e) => setNationality(e.target.value)}
+                  placeholder="Nigerian"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="form-label" htmlFor="dob">Date of birth</label>
+              <input
+                id="dob"
+                type="date"
+                className="form-control"
+                value={dateOfBirth}
+                onChange={(e) => setDOB(e.target.value)}
+              />
+            </div>
+
+            <div className="pt-2">
+              <button type="submit" disabled={busy} className="btn-primary w-full md:w-auto">
+                {busy ? "Creating account…" : "Create account"}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
-  );
-}
-
-function Field({ label, value, onChange, type="text", placeholder="", required=false }) {
-  return (
-    <div>
-      <label className="block text-sm text-gray-700 mb-1">{label}</label>
-      <input
-        type={type}
-        required={required}
-        className="border p-3 rounded w-full focus:outline-none focus:ring focus:ring-blue-200"
-        value={value || ""}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
     </div>
   );
 }

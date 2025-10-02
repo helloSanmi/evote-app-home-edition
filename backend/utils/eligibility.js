@@ -1,20 +1,25 @@
 // backend/utils/eligibility.js
-const dayjs = require("dayjs");
+
+function toDate(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 function calcAgeOn(dateOfBirth, atDate) {
-  if (!dateOfBirth) return null;
-  const dob = dayjs(dateOfBirth);
-  const at = dayjs(atDate);
-  if (!dob.isValid() || !at.isValid()) return null;
-  let age = at.year() - dob.year();
-  if (at.month() < dob.month() || (at.month() === dob.month() && at.date() < dob.date())) age--;
+  const dob = toDate(dateOfBirth);
+  const at = toDate(atDate || new Date());
+  if (!dob || !at) return null;
+  let age = at.getFullYear() - dob.getFullYear();
+  const monthDiff = at.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && at.getDate() < dob.getDate())) age--;
   return age;
 }
 
 async function whitelistOK(pool, user, period) {
   if (!period.requireWhitelist) return true;
   const [rows] = await pool.query(
-    "SELECT id FROM EligibleVoters WHERE (email IS NOT NULL AND email=?) OR (voterId IS NOT NULL AND voterId=?) LIMIT 1",
+    "SELECT TOP 1 id FROM EligibleVoters WHERE (email IS NOT NULL AND email=?) OR (voterId IS NOT NULL AND voterId=?)",
     [user.email || null, user.nationalId || null]
   );
   return rows.length > 0;
@@ -30,8 +35,23 @@ async function checkEligibility(pool, user, period) {
     if (age < Number(period.minAge)) return { eligible: false, reason: `Minimum age ${period.minAge}` };
   }
 
-  // Scope by LGA
-  if (period.scopeLGA && String(period.scopeLGA).trim()) {
+  const scope = (period.scope || "national").toLowerCase();
+  if (scope === "state") {
+    if (!user.state || !period.scopeState) return { eligible: false, reason: "State restriction" };
+    if (String(user.state).trim().toLowerCase() !== String(period.scopeState).trim().toLowerCase()) {
+      return { eligible: false, reason: `Restricted to ${period.scopeState}` };
+    }
+  }
+  if (scope === "local") {
+    if (!user.state || !period.scopeState) return { eligible: false, reason: "State restriction" };
+    const matchesState = String(user.state).trim().toLowerCase() === String(period.scopeState).trim().toLowerCase();
+    if (!matchesState) return { eligible: false, reason: `Restricted to ${period.scopeState}` };
+    if (!user.residenceLGA || !period.scopeLGA) return { eligible: false, reason: "LGA restriction" };
+    if (String(user.residenceLGA).trim().toLowerCase() !== String(period.scopeLGA).trim().toLowerCase()) {
+      return { eligible: false, reason: `Restricted to ${period.scopeLGA}` };
+    }
+  } else if (period.scopeLGA && String(period.scopeLGA).trim()) {
+    // Backward compatibility: if LGA is set but scope omitted, still enforce LGA
     if (!user.residenceLGA) return { eligible: false, reason: "Residence LGA not set" };
     if (String(user.residenceLGA).trim().toLowerCase() !== String(period.scopeLGA).trim().toLowerCase()) {
       return { eligible: false, reason: `Restricted to ${period.scopeLGA}` };
@@ -47,4 +67,4 @@ async function checkEligibility(pool, user, period) {
   return { eligible: true };
 }
 
-module.exports = { checkEligibility };
+module.exports = { checkEligibility, calcAgeOn };

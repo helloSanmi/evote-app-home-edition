@@ -1,5 +1,5 @@
 // frontend/components/Navbar.js
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
@@ -8,17 +8,29 @@ export default function Navbar() {
   const [mounted, setMounted] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
   useEffect(() => {
     setMounted(true);
     const sync = () => {
-      setIsAdmin(localStorage.getItem("isAdmin") === "true");
+      const adm = (localStorage.getItem("isAdmin") || "").toLowerCase();
+      setIsAdmin(adm === "true" || adm === "1");
       setLoggedIn(!!localStorage.getItem("token"));
     };
     sync();
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
   }, []);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(e.target)) setMenuOpen(false);
+    }
+    if (menuOpen) document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [menuOpen]);
 
   const signOut = () => {
     try {
@@ -31,54 +43,94 @@ export default function Navbar() {
     if (typeof window !== "undefined") window.location.replace("/login");
   };
 
-  const item = (href, label) => (
+  const navItem = (href, label) => (
     <Link
+      key={href}
       href={href}
-      className={`px-3 py-1 rounded transition hover:bg-gray-100 ${
-        router.pathname === href ? "bg-gray-200 font-semibold" : ""
+      className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
+        router.pathname === href
+          ? "bg-slate-900 text-white shadow-sm"
+          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
       }`}
     >
       {label}
     </Link>
   );
 
-  if (!mounted) {
-    return (
-      <nav className="w-full bg-white/90 backdrop-blur border-b">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-          <span className="font-extrabold tracking-tight text-lg">E-Voting</span>
-        </div>
-      </nav>
-    );
-  }
+  if (!mounted) return null;
+
+  const avatarSrc =
+    typeof window !== "undefined"
+      ? localStorage.getItem("profilePhoto") || "/avatar.png"
+      : "/avatar.png";
 
   return (
-    <nav className="w-full bg-white/90 backdrop-blur border-b">
-      <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 hover:opacity-90">
-          <img src="/logo.png" alt="E-Voting" className="h-7 w-7 rounded" />
-          <span className="font-extrabold tracking-tight text-lg">E-Voting</span>
+    <nav className="sticky top-0 z-50 w-full border-b border-slate-200/60 bg-white/85 backdrop-blur-md shadow-sm">
+      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 md:px-8">
+        <Link
+          href="/"
+          className="flex items-center gap-2 rounded-full px-2 py-1 transition hover:bg-slate-100"
+        >
+          <img
+            src="/logo.png"
+            alt="E-Voting"
+            className="h-9 w-9 rounded-full ring-1 ring-slate-200/70"
+          />
+          <span className="font-extrabold tracking-tight text-lg text-slate-900">
+            E-Voting
+          </span>
         </Link>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 md:gap-3">
           {isAdmin ? (
             <>
-              {item("/admin", "Admin")}
-              <button onClick={signOut} className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition">
+              {navItem("/admin", "Admin")}
+              <button
+                type="button"
+                onClick={signOut}
+                className="rounded-full px-3.5 py-1.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+              >
                 Sign out
               </button>
             </>
           ) : (
             <>
-              {loggedIn && item("/vote", "Vote")}
-              {loggedIn && item("/results", "Results")}
-              {loggedIn && item("/profile", "Profile")}
-              {!loggedIn && item("/login", "Login")}
-              {!loggedIn && item("/register", "Register")}
-              {loggedIn && (
-                <button onClick={signOut} className="px-3 py-1 text-red-600 hover:bg-red-50 rounded transition">
-                  Sign out
-                </button>
+              {loggedIn && navItem("/vote", "Vote")}
+              {loggedIn && navItem("/results", "Results")}
+              {loggedIn ? (
+                <div className="relative" ref={menuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setMenuOpen((open) => !open)}
+                    aria-haspopup="true"
+                    aria-expanded={menuOpen}
+                    className="h-10 w-10 overflow-hidden rounded-full border border-slate-200/60 bg-white shadow-sm transition hover:ring-2 hover:ring-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+                  >
+                    <img src={avatarSrc} alt="My profile" className="h-full w-full object-cover" />
+                  </button>
+                  {menuOpen && (
+                    <div className="absolute right-0 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200/60 bg-white/95 shadow-lg backdrop-blur z-50">
+                      <Link
+                        href="/profile"
+                        className="block px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+                      >
+                        Profile
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={signOut}
+                        className="w-full px-4 py-2 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-50"
+                      >
+                        Sign out
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {navItem("/login", "Login")}
+                  {navItem("/register", "Register")}
+                </>
               )}
             </>
           )}

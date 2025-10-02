@@ -1,173 +1,175 @@
-// frontend/pages/profile.js
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import NG from "../public/ng-states-lgas.json";
+import { api, jget, jput, safeJson } from "../lib/apiBase";
+import { mediaUrl } from "../lib/mediaUrl";
 import { notifyError, notifySuccess } from "../components/Toast";
-import { api, safeJson } from "../lib/apiBase";
 
 export default function Profile() {
-  const router = useRouter();
-  const token = useMemo(() => (typeof window !== "undefined" ? localStorage.getItem("token") : null), []);
-  const [u, setU] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  // edit state
+  const [user, setUser] = useState(null);
+  const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [stateSel, setStateSel] = useState("");
-  const [lgaSel, setLgaSel] = useState("");
+  const [form, setForm] = useState({ state: "", residenceLGA: "", phone: "", dateOfBirth: "" });
 
-  // NG states/LGAs (loaded from /public/ng-states-lgas.json)
-  const [ngStates, setNgStates] = useState([]); // [{state, lgas:[]}]
-  const [lgas, setLgas] = useState([]);
+  // Your JSON might be {states:[{state, lgas}]} or { "Abia": [...] }. Normalize:
+  const norm = useMemo(() => {
+    if (Array.isArray(NG?.states)) return NG.states;
+    if (!Array.isArray(NG)) {
+      return Object.entries(NG || {}).map(([state, lgas]) => ({ state, lgas }));
+    }
+    return NG;
+  }, []);
+  const allStates = norm.map(x => x.state || x.name);
+  const lgasForState = (form.state
+    ? (norm.find(x => (x.state || x.name) === form.state)?.lgas || [])
+    : []);
 
-  // Load NG JSON (client-side) & normalize shapes
   useEffect(() => {
+    let isMounted = true;
     (async () => {
       try {
-        const r = await fetch("/ng-states-lgas.json", { cache: "force-cache" });
-        const raw = await r.json();
-        let arr = [];
-        if (Array.isArray(raw)) {
-          arr = raw;
-        } else if (Array.isArray(raw?.states)) {
-          arr = raw.states;
-        } else if (raw && typeof raw === "object") {
-          arr = Object.keys(raw).map((k) => ({ state: k, lgas: raw[k] || [] }));
-        }
-        setNgStates(arr);
-      } catch {
-        setNgStates([]);
+        const me = await jget("/api/profile/me"); // backend/profile.js -> GET /me (uses Users) :contentReference[oaicite:2]{index=2}
+        if (!isMounted) return;
+        setUser(me);
+        setForm({
+          state: me.state || "",
+          residenceLGA: me.residenceLGA || "",
+          phone: me.phone || "",
+          dateOfBirth: (me.dateOfBirth || "").slice(0, 10),
+        });
+      } catch (e) {
+        notifyError(e.message || "Failed to load profile");
       }
     })();
+    return () => (isMounted = false);
   }, []);
 
-  useEffect(() => {
-    if (!token) router.replace("/login");
-    else load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  useEffect(() => {
-    const st = ngStates.find((s) => String(s.state || "").toLowerCase() === String(stateSel || "").toLowerCase());
-    setLgas(st?.lgas || []);
-    setLgaSel((prev) => (st?.lgas?.includes(prev) ? prev : ""));
-  }, [stateSel, ngStates]);
-
-  async function load() {
-    setLoading(true);
+  async function save() {
+    setBusy(true);
     try {
-      const r = await fetch(api("/api/auth/me"), { headers: { Authorization: `Bearer ${token}` } });
-      const data = await safeJson(r);
-      if (!r.ok) throw new Error(data?.error || "Failed to load profile");
-      setU(data);
-      setEmail(data.email || "");
-      setPhone(data.phone || "");
-      setStateSel(data.state || "");
-      // initialize lgas list then pick residenceLGA if valid
-      const st = ngStates.find((s) => String(s.state || "").toLowerCase() === String(data.state || "").toLowerCase());
-      setLgas(st?.lgas || []);
-      setLgaSel(st?.lgas?.includes(data.residenceLGA) ? data.residenceLGA : "");
+      await jput("/api/profile", {
+        fullName: user.fullName, // unchanged
+        state: form.state || null,
+        residenceLGA: form.residenceLGA || null,
+        phone: form.phone || null,
+        dateOfBirth: form.dateOfBirth || null,
+      }); // backend/profile.js PUT / (updates Users) :contentReference[oaicite:3]{index=3}
+      notifySuccess("Profile updated");
+      setEditing(false);
+      const me = await jget("/api/profile/me");
+      setUser(me);
     } catch (e) {
       notifyError(e.message);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
-  async function save() {
+  async function onPickAvatar(e) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!/image\/(png|jpe?g)/i.test(f.type)) return notifyError("Only PNG/JPG allowed");
+    const fd = new FormData();
+    fd.append("file", f);
     try {
-      const r = await fetch(api("/api/auth/profile"), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          email,
-          phone,
-          state: stateSel,
-          residenceLGA: lgaSel,
-        }),
-      });
-      const data = await safeJson(r);
-      if (!r.ok || !data?.success) throw new Error(data?.error || "Failed to update");
-      setU(data.user);
-      setEditing(false);
-      notifySuccess("Profile updated");
+      const token = localStorage.getItem("token");
+      const r = await fetch(`${api}/api/profile/photo`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      }); // backend/profile.js POST /photo -> saves /uploads/profile/... & Users.profilePhoto :contentReference[oaicite:4]{index=4}
+      const j = await safeJson(r);
+      if (!r.ok || !j?.url) throw new Error(j?.message || "Upload failed");
+      notifySuccess("Photo updated");
+      setUser(u => ({ ...u, profilePhoto: j.url }));
     } catch (e) {
-      notifyError(e.message);
+      notifyError(e.message || "Upload failed");
     }
   }
 
-  if (loading) return <div className="max-w-3xl mx-auto bg-white rounded-xl shadow p-6 mt-6 animate-pulse">Loading…</div>;
-  if (!u) return null;
+  if (!user) return <div className="max-w-3xl mx-auto px-4 py-8">Loading…</div>;
 
   return (
-    <div className="max-w-3xl mx-auto px-4">
-      <div className="bg-white rounded-xl shadow p-6 mt-6">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-bold">Your Profile</h1>
+    <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+      <div className="bg-white rounded-2xl shadow p-6 flex items-center gap-5">
+        <label className="relative cursor-pointer group">
+          <img
+            src={mediaUrl(user.profilePhoto)}
+            className="w-24 h-24 rounded-full object-cover border"
+            alt={user.fullName}
+            title="Click to change"
+          />
+          <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={onPickAvatar} />
+          <span className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-full transition" />
+        </label>
+        <div>
+          <div className="text-2xl font-bold">{user.fullName}</div>
+          <div className="text-gray-600">{user.username} • {user.email}</div>
+          <div className="text-gray-500 text-sm">Joined {new Date(user.createdAt).toLocaleDateString()}</div>
+        </div>
+        <div className="ml-auto">
           {!editing ? (
-            <button onClick={() => setEditing(true)} className="px-3 py-2 rounded border hover:bg-gray-50">Edit</button>
+            <button onClick={() => setEditing(true)} className="btn-secondary">Edit</button>
           ) : (
             <div className="flex gap-2">
-              <button onClick={() => { setEditing(false); load(); }} className="px-3 py-2 rounded border hover:bg-gray-50">Cancel</button>
-              <button onClick={save} className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">Save Changes</button>
+              <button disabled={busy} onClick={save} className="btn-primary disabled:opacity-60">Save</button>
+              <button disabled={busy} onClick={() => { setEditing(false); }} className="btn-secondary">Cancel</button>
             </div>
           )}
         </div>
+      </div>
 
-        {!editing ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label="Full Name" value={u.fullName} />
-            <Field label="Username" value={u.username} />
-            <Field label="Email" value={u.email} />
-            <Field label="Phone" value={u.phone || "-"} />
-            <Field label="State" value={u.state || "-"} />
-            <Field label="Residence LGA" value={u.residenceLGA || "-"} />
-            <Field label="Nationality" value={u.nationality || "-"} />
-            <Field label="Date of Birth" value={u.dateOfBirth ? new Date(u.dateOfBirth).toLocaleDateString() : "-"} />
-            <Field label="Has Voted (latest period)" value={u.hasVoted ? "Yes" : "No"} />
-            <Field label="Member Since" value={new Date(u.createdAt).toLocaleString()} />
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <EditField label="Email">
-              <input className="border p-2 rounded w-full" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </EditField>
-            <EditField label="Phone">
-              <input className="border p-2 rounded w-full" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </EditField>
-            <EditField label="State">
-              <select className="border p-2 rounded w-full" value={stateSel} onChange={(e) => setStateSel(e.target.value)}>
-                <option value="">Select</option>
-                {ngStates.map((s) => <option key={s.state} value={s.state}>{s.state}</option>)}
-              </select>
-            </EditField>
-            <EditField label="Residence LGA">
-              <select className="border p-2 rounded w-full" value={lgaSel} onChange={(e) => setLgaSel(e.target.value)} disabled={!stateSel}>
-                <option value="">{stateSel ? "Select LGA" : "Select State first"}</option>
-                {lgas.map((l) => <option key={l} value={l}>{l}</option>)}
-              </select>
-            </EditField>
-          </div>
-        )}
+      {/* Only these fields are editable */}
+      <div className="bg-white rounded-2xl shadow p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Field label="Full name" value={user.fullName} />
+        <Field label="Username" value={user.username} />
+        <Field label="Email" value={user.email} />
+
+        <Field label="State">
+          {editing ? (
+            <select className="form-control" value={form.state} onChange={e=>setForm(f=>({ ...f, state: e.target.value, residenceLGA: "" }))}>
+              <option value="">Select state…</option>
+              {allStates.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          ) : <span>{user.state || "-"}</span>}
+        </Field>
+
+        <Field label="LGA">
+          {editing ? (
+            <select className="form-control" value={form.residenceLGA} onChange={e=>setForm(f=>({ ...f, residenceLGA: e.target.value }))} disabled={!form.state}>
+              <option value="">{form.state ? "Select LGA…" : "Pick state first"}</option>
+              {lgasForState.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          ) : <span>{user.residenceLGA || "-"}</span>}
+        </Field>
+
+        <Field label="Phone">
+          {editing ? (
+            <input className="form-control" value={form.phone} onChange={e=>setForm(f=>({ ...f, phone: e.target.value }))}/>
+          ) : <span>{user.phone || "-"}</span>}
+        </Field>
+
+        <Field label="Date of birth">
+          {editing ? (
+            <input type="date" className="form-control" value={form.dateOfBirth} onChange={e=>setForm(f=>({ ...f, dateOfBirth: e.target.value }))}/>
+          ) : <span>{(user.dateOfBirth || "").slice(0,10) || "-"}</span>}
+        </Field>
+      </div>
+
+      {/* Change password card (link to /reset-password flow you described) */}
+      <div className="bg-white rounded-2xl shadow p-6">
+        <div className="font-semibold mb-2">Security</div>
+        <a className="text-blue-600 hover:underline" href="/reset-password">Change / Reset password</a>
       </div>
     </div>
   );
 }
 
-function Field({ label, value }) {
+function Field({ label, value, children }) {
   return (
-    <div className="p-4 border rounded-lg bg-gray-50">
-      <div className="text-xs uppercase tracking-wide text-gray-500">{label}</div>
-      <div className="mt-1 font-medium break-words">{value ?? "-"}</div>
-    </div>
-  );
-}
-function EditField({ label, children }) {
-  return (
-    <div className="p-4 border rounded-lg bg-gray-50">
-      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">{label}</div>
-      {children}
+    <div>
+      <div className="text-xs text-gray-600">{label}</div>
+      {children ? children : <div className="font-medium">{value ?? "-"}</div>}
     </div>
   );
 }
