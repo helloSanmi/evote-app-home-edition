@@ -2,6 +2,9 @@ const express = require("express");
 const router = express.Router();
 const { q } = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { checkEligibility } = require("../utils/eligibility");
+
+const normalize = (value) => (value || "").trim().toLowerCase();
 
 function yearsBetween(dobStr) {
   if (!dobStr) return 0;
@@ -36,24 +39,56 @@ router.post("/", requireAuth, async (req, res) => {
     const cid = Number(req.body?.candidateId || 0);
     if (!cid) return res.status(400).json({ error: "MISSING_FIELD", message: "candidateId required" });
 
-    const [[cand]] = await q(`SELECT TOP 1 id, periodId FROM Candidates WHERE id=?`, [cid]);
-    if (!cand?.periodId) return res.status(400).json({ error: "INVALID", message: "Candidate not in a session" });
+    const [[candidate]] = await q(`SELECT TOP 1 id, periodId, state, lga FROM Candidates WHERE id=?`, [cid]);
+    if (!candidate?.periodId) return res.status(400).json({ error: "INVALID", message: "Candidate not in a session" });
 
-    const [[p]] = await q(`SELECT TOP 1 id, minAge FROM VotingPeriod WHERE id=?`, [cand.periodId]);
-    if (!p) return res.status(404).json({ error: "NOT_FOUND" });
+    const [[period]] = await q(`SELECT TOP 1 id, minAge, scope, scopeState, scopeLGA, startTime, requireWhitelist FROM VotingPeriod WHERE id=?`, [candidate.periodId]);
+    if (!period) return res.status(404).json({ error: "NOT_FOUND" });
 
-    const [[me]] = await q(`SELECT TOP 1 dateOfBirth FROM Users WHERE id=?`, [req.user.id]);
-    const myAge = yearsBetween(me?.dateOfBirth);
-    const minAge = Math.max(Number(p.minAge || 0), 18);
+    const [[user]] = await q(`SELECT TOP 1 email, state, residenceLGA, dateOfBirth FROM Users WHERE id=?`, [req.user.id]);
+
+    const periodScope = (period.scope || 'national').toLowerCase();
+    if (periodScope === 'state') {
+      if (!normalize(candidate.state) || normalize(candidate.state) !== normalize(period.scopeState)) {
+        return res.status(400).json({ error: "SCOPE_MISMATCH", message: "Candidate does not belong to this state election" });
+      }
+    }
+    if (periodScope === 'local') {
+      if (!normalize(candidate.state) || normalize(candidate.state) !== normalize(period.scopeState) || !normalize(candidate.lga) || normalize(candidate.lga) !== normalize(period.scopeLGA)) {
+        return res.status(400).json({ error: "SCOPE_MISMATCH", message: "Candidate does not belong to this local government election" });
+      }
+    }
+
+    const myAge = yearsBetween(user?.dateOfBirth);
+    const minAge = Math.max(Number(period.minAge || 0), 18);
     if (myAge < minAge) return res.status(403).json({ error: "FORBIDDEN", message: "You must be at least 18 to vote" });
 
-    const [[dupe]] = await q(`SELECT TOP 1 id FROM Votes WHERE userId=? AND periodId=?`, [req.user.id, p.id]);
+    const [[dupe]] = await q(`SELECT TOP 1 id FROM Votes WHERE userId=? AND periodId=?`, [req.user.id, period.id]);
     if (dupe) return res.status(409).json({ error: "DUPLICATE", message: "You already voted" });
 
-    await q(`INSERT INTO Votes (userId, candidateId, periodId) VALUES (?,?,?)`, [req.user.id, cid, p.id]);
+    const poolAdapter = { query: (sqlText, params = []) => q(sqlText, params) };
+    const eligibility = await checkEligibility(poolAdapter, {
+      email: user?.email || null,
+      state: user?.state || null,
+      residenceLGA: user?.residenceLGA || null,
+      dateOfBirth: user?.dateOfBirth || null,
+    }, {
+      minAge: period.minAge,
+      startTime: period.startTime,
+      scope: period.scope,
+      scopeState: period.scopeState,
+      scopeLGA: period.scopeLGA,
+      requireWhitelist: period.requireWhitelist,
+    });
+
+    if (!eligibility.eligible) {
+      return res.status(403).json({ error: "FORBIDDEN", message: eligibility.reason || "You are not eligible for this session" });
+    }
+
+    await q(`INSERT INTO Votes (userId, candidateId, periodId) VALUES (?,?,?)`, [req.user.id, cid, period.id]);
     await q(`UPDATE Candidates SET votes=votes+1 WHERE id=?`, [cid]);
 
-    req.app.get("io")?.emit("voteUpdate", { periodId: p.id });
+    req.app.get("io")?.emit("voteUpdate", { periodId: period.id });
     res.json({ success: true });
   } catch (e) {
     console.error("vote/post:", e);

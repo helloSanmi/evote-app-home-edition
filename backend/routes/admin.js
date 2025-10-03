@@ -22,7 +22,7 @@ router.post("/upload-image", requireAuth, requireAdmin, uploadCand.single("file"
 // ---------- unpublished candidates ----------
 router.get("/unpublished", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const [rows] = await q(`SELECT id,name,state,lga,photoUrl FROM Candidates WHERE published=0 ORDER BY id DESC`);
+    const [rows] = await q(`SELECT id,name,state,lga,photoUrl FROM Candidates WHERE published=0 AND periodId IS NULL ORDER BY id DESC`);
     res.json(rows || []);
   } catch (e) {
     console.error("admin/unpublished:", e);
@@ -51,19 +51,57 @@ router.post("/voting-period", requireAuth, requireAdmin, async (req, res) => {
     const { title, description, start, end, minAge, scope, scopeState, scopeLGA } = req.body || {};
     if (!title || !start || !end) return res.status(400).json({ error: "MISSING_FIELDS" });
 
+    const electionScope = (scope || 'national').toLowerCase();
+    if (electionScope === 'state' && !scopeState) return res.status(400).json({ error: "MISSING_SCOPE", message: "State scope requires a state" });
+    if (electionScope === 'local' && (!scopeState || !scopeLGA)) return res.status(400).json({ error: "MISSING_SCOPE", message: "Local scope requires both state and LGA" });
+
+    const [draftCandidates] = await q(`SELECT id, name, state, lga FROM Candidates WHERE published=0 AND (periodId IS NULL)`);
+    if (!draftCandidates.length) {
+      return res.status(400).json({ error: "NO_CANDIDATES", message: "Add at least one unpublished candidate before starting a session" });
+    }
+
+    const normalize = (value) => (value || '').trim().toLowerCase();
+    const targetState = normalize(scopeState);
+    const targetLga = normalize(scopeLGA);
+
+    const mismatched = draftCandidates.filter((cand) => {
+      if (electionScope === 'national') return false;
+      const candState = normalize(cand.state);
+      if (!candState || candState !== targetState) return true;
+      if (electionScope === 'local') {
+        const candLga = normalize(cand.lga);
+        if (!candLga || candLga !== targetLga) return true;
+      }
+      return false;
+    });
+
+    if (mismatched.length) {
+      const names = mismatched.map((c) => c.name).join(', ');
+      return res.status(400).json({
+        error: "SCOPE_MISMATCH",
+        message: `The following candidates do not match the selected scope: ${names}. Update their details or choose candidates that match.`,
+      });
+    }
+
     const [insertRows] = await q(
       `INSERT INTO VotingPeriod (title, description, startTime, endTime, minAge, scope, scopeState, scopeLGA, resultsPublished, forcedEnded)
        OUTPUT INSERTED.id
        VALUES (?,?,?,?,?,?,?,?,0,0)`,
-      [title, description || null, new Date(start), new Date(end), Math.max(Number(minAge||18),18),
-       scope || 'national', scopeState || null, scopeLGA || null]
+      [title, description || null, new Date(start), new Date(end), Math.max(Number(minAge || 18), 18),
+       electionScope, scopeState || null, scopeLGA || null]
     );
     const insertId = insertRows?.[0]?.id;
 
     if (!insertId) throw new Error("Failed to create voting period");
 
-    // attach all unpublished candidates to this period
-    await q(`UPDATE Candidates SET periodId=?, published=1 WHERE published=0 AND (periodId IS NULL)`, [insertId]);
+    const candidateIds = draftCandidates.map((cand) => cand.id);
+    if (candidateIds.length) {
+      const placeholders = candidateIds.map(() => '?').join(',');
+      await q(
+        `UPDATE Candidates SET periodId=?, published=1 WHERE id IN (${placeholders})`,
+        [insertId, ...candidateIds]
+      );
+    }
 
     req.app.get("io")?.emit("periodCreated", { periodId: insertId });
     res.json({ success: true, id: insertId });
@@ -100,37 +138,67 @@ router.get("/candidates", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // end early (latest active/unpublished)
-router.post("/end-voting-early", requireAuth, requireAdmin, async (_req, res) => {
+router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const [[period]] = await q(
-      `SELECT TOP 1 id FROM VotingPeriod
-       WHERE forcedEnded=0 AND resultsPublished=0 AND endTime > GETUTCDATE()
-       ORDER BY id DESC`
-    );
-    if (!period) return res.json({ success: true });
+    const pid = Number(req.body?.periodId || 0);
+    let period = null;
+
+    if (pid) {
+      const [[row]] = await q(`SELECT id, forcedEnded, resultsPublished FROM VotingPeriod WHERE id=?`, [pid]);
+      if (!row) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
+      period = row;
+    } else {
+      const [[row]] = await q(
+        `SELECT TOP 1 id, forcedEnded, resultsPublished FROM VotingPeriod
+         WHERE forcedEnded=0 AND resultsPublished=0 AND endTime > SYSUTCDATETIME()
+         ORDER BY endTime ASC`
+      );
+      if (!row) return res.json({ success: true, already: true });
+      period = row;
+    }
+
+    if (period.forcedEnded || period.resultsPublished) {
+      return res.json({ success: true, already: true, periodId: period.id });
+    }
+
     await q(`UPDATE VotingPeriod SET forcedEnded=1 WHERE id=?`, [period.id]);
-    res.json({ success: true });
+    res.json({ success: true, periodId: period.id });
   } catch (e) {
     console.error("admin/end-early:", e);
-    res.status(500).json({ error: "SERVER" });
+    res.status(500).json({ error: "SERVER", message: "Could not end voting early" });
   }
 });
 
 // publish results for last ended/forced
-router.post("/publish-results", requireAuth, requireAdmin, async (_req, res) => {
+router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const [[period]] = await q(
-      `SELECT TOP 1 id FROM VotingPeriod
-       WHERE (forcedEnded=1 OR endTime <= GETUTCDATE()) AND resultsPublished=0
-       ORDER BY id DESC`
-    );
-    if (!period) return res.json({ success: true });
+    const pid = Number(req.body?.periodId || 0);
+    let period = null;
+
+    if (pid) {
+      const [[row]] = await q(`SELECT id, resultsPublished FROM VotingPeriod WHERE id=?`, [pid]);
+      if (!row) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
+      period = row;
+    } else {
+      const [[row]] = await q(
+        `SELECT TOP 1 id, resultsPublished FROM VotingPeriod
+         WHERE resultsPublished=0 AND (forcedEnded=1 OR endTime <= SYSUTCDATETIME())
+         ORDER BY endTime DESC`
+      );
+      if (!row) return res.json({ success: true, already: true });
+      period = row;
+    }
+
+    if (period.resultsPublished) {
+      return res.json({ success: true, already: true, periodId: period.id });
+    }
+
     await q(`UPDATE VotingPeriod SET resultsPublished=1 WHERE id=?`, [period.id]);
-    req.app.get("io")?.emit("resultsPublished", {}); // clients will refetch
-    res.json({ success: true });
+    req.app.get("io")?.emit("resultsPublished", { periodId: period.id });
+    res.json({ success: true, periodId: period.id });
   } catch (e) {
     console.error("admin/publish:", e);
-    res.status(500).json({ error: "SERVER" });
+    res.status(500).json({ error: "SERVER", message: "Could not publish results" });
   }
 });
 
@@ -154,17 +222,68 @@ router.get("/audit", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.get("/periods/delete", requireAuth, requireAdmin, async (req, res) => {
+async function removePeriod(req, res) {
   try {
-    const pid = Number(req.query.periodId || 0);
+    const pid = Number(req.query.periodId || req.body?.periodId || 0);
     if (!pid) return res.status(400).json({ error: "MISSING_ID" });
     await q(`DELETE FROM Votes WHERE periodId=?`, [pid]);
-    await q(`UPDATE Candidates SET periodId=NULL, published=0, votes=0 WHERE periodId=?`, [pid]);
+    await q(`DELETE FROM Candidates WHERE periodId=?`, [pid]);
     await q(`DELETE FROM VotingPeriod WHERE id=?`, [pid]);
-    res.json({ success: true });
+    res.json({ success: true, periodId: pid });
   } catch (e) {
     console.error("admin/periods/delete:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not delete voting period" });
+  }
+}
+
+router.delete("/periods/delete", requireAuth, requireAdmin, removePeriod);
+router.post("/periods/delete", requireAuth, requireAdmin, removePeriod);
+
+// users management
+router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const [rows] = await q(`SELECT id, fullName, username, email, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, isAdmin, createdAt FROM Users ORDER BY id DESC`);
+    res.json(rows || []);
+  } catch (e) {
+    console.error("admin/users:", e);
     res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.post("/users/:id/disable", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const uid = Number(req.params.id || 0);
+    if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    await q(`UPDATE Users SET eligibilityStatus='disabled' WHERE id=?`, [uid]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("admin/users/disable:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not disable user" });
+  }
+});
+
+router.post("/users/:id/enable", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const uid = Number(req.params.id || 0);
+    if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    await q(`UPDATE Users SET eligibilityStatus='active' WHERE id=?`, [uid]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("admin/users/enable:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not enable user" });
+  }
+});
+
+router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const uid = Number(req.params.id || 0);
+    if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    await q(`DELETE FROM Users WHERE id=?`, [uid]);
+    await q(`DECLARE @mx INT = (SELECT ISNULL(MAX(id),0) FROM Users); DBCC CHECKIDENT('Users', RESEED, @mx);`);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("admin/users/delete:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not delete user" });
   }
 });
 

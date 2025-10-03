@@ -29,6 +29,7 @@ export default function Login() {
       localStorage.setItem("token", data.token);
       localStorage.setItem("userId", data.userId);
       localStorage.setItem("username", data.username);
+      localStorage.setItem("profilePhoto", data.profilePhoto || "/avatar.png");
       localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
       window.dispatchEvent(new Event("storage"));
       notifySuccess("Signed in successfully");
@@ -42,7 +43,7 @@ export default function Login() {
 
   return (
     <div className="mx-auto flex min-h-[60vh] w-full max-w-5xl flex-col justify-center">
-      <div className="grid overflow-hidden rounded-[2rem] border border-white/40 bg-white/80 shadow-[0_35px_100px_-45px_rgba(15,23,42,0.55)] backdrop-blur-lg md:grid-cols-5">
+      <div className="grid overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_35px_100px_-45px_rgba(15,23,42,0.35)] backdrop-blur-lg md:grid-cols-5">
         <div className="relative hidden flex-col justify-between bg-gradient-to-br from-slate-900 via-slate-800 to-slate-700 p-8 text-slate-100 md:flex md:col-span-2">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-slate-300">Secure Ballots</p>
@@ -97,7 +98,7 @@ export default function Login() {
               <button
                 type="submit"
                 disabled={busy}
-                className="btn-primary w-full"
+                className="btn-primary w-full text-base"
               >
                 {busy ? "Signing in…" : "Sign In"}
               </button>

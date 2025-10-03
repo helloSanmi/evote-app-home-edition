@@ -20,6 +20,23 @@ async function getUserCore(userId) {
   return u || null;
 }
 
+function scopeAllows(user, period) {
+  if (!period) return false;
+  const scope = (period.scope || 'national').toLowerCase();
+  if (scope === 'national') return true;
+  const userState = (user?.state || '').toLowerCase();
+  const userLga = (user?.residenceLGA || '').toLowerCase();
+  const targetState = (period.scopeState || '').toLowerCase();
+  const targetLga = (period.scopeLGA || '').toLowerCase();
+  if (scope === 'state') {
+    return Boolean(userState && targetState && userState === targetState);
+  }
+  if (scope === 'local') {
+    return Boolean(userState && targetState && userState === targetState && userLga && targetLga && userLga === targetLga);
+  }
+  return false;
+}
+
 // Sessions the user is eligible to SEE (not published)
 router.get("/eligible-sessions", requireAuth, async (req, res) => {
   try {
@@ -35,15 +52,7 @@ router.get("/eligible-sessions", requireAuth, async (req, res) => {
     const eligible = rows.filter(p => {
       const minAge = Math.max(Number(p.minAge || 0), 18);
       if (myAge < minAge) return false;
-      if (p.scope === "national") return true;
-      if (p.scope === "state")
-        return me?.state && p.scopeState && me.state.toLowerCase() === p.scopeState.toLowerCase();
-      if (p.scope === "local") {
-        const okState = me?.state && p.scopeState && me.state.toLowerCase() === p.scopeState.toLowerCase();
-        const okLga   = me?.residenceLGA && p.scopeLGA && me.residenceLGA.toLowerCase() === p.scopeLGA.toLowerCase();
-        return okState && okLga;
-      }
-      return false;
+      return scopeAllows(me, p);
     });
 
     res.json(eligible);
@@ -70,12 +79,14 @@ router.get("/candidates", requireAuth, async (req, res) => {
 });
 
 // Published sessions (for Results page dropdown)
-router.get("/published-sessions", requireAuth, async (_req, res) => {
+router.get("/published-sessions", requireAuth, async (req, res) => {
   try {
+    const me = await getUserCore(req.user.id);
     const [rows] = await q(
       `SELECT * FROM VotingPeriod WHERE resultsPublished=1 ORDER BY endTime DESC`
     );
-    res.json(rows);
+    const allowed = rows.filter((p) => scopeAllows(me, p));
+    res.json(allowed);
   } catch (e) {
     console.error("public/published-sessions:", e);
     res.status(500).json({ error: "SERVER" });
@@ -87,8 +98,13 @@ router.get("/results", requireAuth, async (req, res) => {
   try {
     const pid = Number(req.query.periodId || 0);
     if (!pid) return res.status(400).json({ error: "MISSING_ID" });
-    const [[p]] = await q(`SELECT resultsPublished FROM VotingPeriod WHERE id=?`, [pid]);
-    if (!p?.resultsPublished) return res.status(403).json({ error: "FORBIDDEN", message: "Not published" });
+    const [[period]] = await q(`SELECT * FROM VotingPeriod WHERE id=?`, [pid]);
+    if (!period?.resultsPublished) return res.status(403).json({ error: "FORBIDDEN", message: "Not published" });
+
+    const me = await getUserCore(req.user.id);
+    if (!scopeAllows(me, period)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Results restricted to eligible voters" });
+    }
 
     const [rows] = await q(
       `SELECT id, name, state, lga, photoUrl, votes FROM Candidates WHERE periodId=? ORDER BY votes DESC, id ASC`,

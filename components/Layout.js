@@ -20,7 +20,7 @@ export default function Layout({ children }) {
           {children}
         </div>
       </main>
-      <footer className="border-t border-slate-200/60 bg-white/80 backdrop-blur">
+      <footer className="border-t border-slate-200/60 bg-white backdrop-blur">
         <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 text-sm text-slate-600 md:px-8">
           <span>© {new Date().getFullYear()} Tech Analytics</span>
           <a className="hover:text-slate-900 transition-colors" href="/faq">FAQ</a>

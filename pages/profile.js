@@ -30,6 +30,10 @@ export default function Profile() {
         const me = await jget("/api/profile/me"); // backend/profile.js -> GET /me (uses Users) :contentReference[oaicite:2]{index=2}
         if (!isMounted) return;
         setUser(me);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("state", me.state || "");
+          localStorage.setItem("residenceLGA", me.residenceLGA || "");
+        }
         setForm({
           state: me.state || "",
           residenceLGA: me.residenceLGA || "",
@@ -57,6 +61,12 @@ export default function Profile() {
       setEditing(false);
       const me = await jget("/api/profile/me");
       setUser(me);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("profilePhoto", me.profilePhoto || "/avatar.png");
+        localStorage.setItem("state", me.state || "");
+        localStorage.setItem("residenceLGA", me.residenceLGA || "");
+        window.dispatchEvent(new Event("storage"));
+      }
     } catch (e) {
       notifyError(e.message);
     } finally {
@@ -81,6 +91,10 @@ export default function Profile() {
       const j = await safeJson(r);
       if (!r.ok || !j?.url) throw new Error(j?.message || "Upload failed");
       notifySuccess("Photo updated");
+      if (typeof window !== "undefined") {
+        localStorage.setItem("profilePhoto", j.url || "/avatar.png");
+        window.dispatchEvent(new Event("storage"));
+      }
       setUser(u => ({ ...u, profilePhoto: j.url }));
     } catch (e) {
       notifyError(e.message || "Upload failed");

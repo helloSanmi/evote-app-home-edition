@@ -203,7 +203,7 @@ export default function Register() {
             </div>
 
             <div className="pt-2">
-              <button type="submit" disabled={busy} className="btn-primary w-full md:w-auto">
+              <button type="submit" disabled={busy} className="btn-primary w-full text-base md:w-auto">
                 {busy ? "Creating account…" : "Create account"}
               </button>
             </div>

@@ -10,121 +10,145 @@ import {
   API_BASE,
 } from "../lib/apiBase";
 import { notifyError, notifySuccess } from "../components/Toast";
-import NG from "../public/ng-states-lgas.json"; // static JSON (works like Register)
+import NG from "../public/ng-states-lgas.json";
 import { getSocket } from "../lib/socket";
+import ConfirmDialog from "../components/ConfirmDialog";
 
-export default function Admin() {
+export default function AdminPage() {
   const router = useRouter();
 
-  // Bearer (legacy support)
   const token = useMemo(
     () => (typeof window !== "undefined" ? localStorage.getItem("token") : null),
     []
   );
 
-  // ---------- NGA states/LGAs ----------
-  // Accept {states:[{state/name, lgas[]}]} OR array OR object { "Abia": [...] }
-  const base = useMemo(() => {
-    if (Array.isArray(NG?.states)) return NG.states;
-    if (Array.isArray(NG)) return NG;
+  const states = useMemo(() => {
+    if (Array.isArray(NG?.states)) return NG.states.map((s) => ({ label: s.state || s.name, lgas: s.lgas || [] }));
+    if (Array.isArray(NG)) return NG.map((s) => ({ label: s.state || s.name, lgas: s.lgas || [] }));
     if (NG && typeof NG === "object") {
-      return Object.entries(NG).map(([state, lgas]) => ({ state, lgas }));
+      return Object.entries(NG).map(([label, lgas]) => ({ label, lgas: lgas || [] }));
     }
     return [];
   }, []);
-  const stateLabel = (s) => (s?.state || s?.name || "");
-  const allStates = base.map(stateLabel);
 
-  // Tabs
-  const [tab, setTab] = useState("overview");
-
-  // Candidates (unpublished)
-  const [cName, setCName] = useState("");
-  const [cState, setCState] = useState("");
-  const [cLga, setCLga] = useState("");
-  const [cPhotoUrl, setCPhotoUrl] = useState("");
-  const candLgas =
-    base.find((x) => stateLabel(x) === cState)?.lgas || [];
   const [unpublished, setUnpublished] = useState([]);
   const [unpubLoading, setUnpubLoading] = useState(false);
 
-  // Start session
+  const sessionsRef = useRef([]);
+  const statsRef = useRef({ active: 0, upcoming: 0, awaiting: 0 });
+  const [sessions, setSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [scope, setScope] = useState("national"); // 'national' | 'state' | 'local'
+  const [scope, setScope] = useState("national");
   const [scopeState, setScopeState] = useState("");
   const [scopeLGA, setScopeLGA] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [minAge, setMinAge] = useState("18");
 
-  // Sessions
-  const [sessions, setSessions] = useState([]);
-  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [cName, setCName] = useState("");
+  const [cState, setCState] = useState("");
+  const [cLga, setCLga] = useState("");
+  const [cPhotoUrl, setCPhotoUrl] = useState("");
 
-  // Current view
   const [selPast, setSelPast] = useState(null);
   const [pastCands, setPastCands] = useState([]);
   const [audit, setAudit] = useState(null);
 
-  // Live (pull every 5s)
-  const [live, setLive] = useState([]); // [{period, candidates:[]}]
+  const [live, setLive] = useState([]);
   const liveTimer = useRef(null);
-
-  // socket
   const socketRef = useRef(null);
 
-  // ---- guard: must be admin ----
+  const [pendingAction, setPendingAction] = useState(null); // { type, period }
+  const [tab, setTab] = useState("overview");
+
+  const tabs = useMemo(() => [
+    { id: "overview", label: "Overview" },
+    { id: "candidates", label: "Candidates" },
+    { id: "sessions", label: "Sessions" },
+    { id: "live", label: "Live" },
+    { id: "archive", label: "Archive" },
+    { id: "logs", label: "Request Logs" },
+  ], []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const isAdmin = localStorage.getItem("isAdmin") === "true";
     if (!localStorage.getItem("token") || !isAdmin) router.replace("/login");
   }, [router]);
 
-  // ---- initial load + socket ----
   useEffect(() => {
     loadUnpublished();
     loadSessions();
 
-    const s = getSocket();
-    socketRef.current = s;
+    const socket = getSocket();
+    socketRef.current = socket;
+    const handleCreated = () => {
+      loadSessions();
+      loadUnpublished();
+    };
+    const handlePublished = () => {
+      loadSessions();
+      loadUnpublished();
+    };
+    const handleVote = () => refreshLive();
 
-    const onPublished = () => loadSessions();
-    const onVote = () => refreshLive();
-
-    s?.on("resultsPublished", onPublished);
-    s?.on("voteUpdate", onVote);
+    socket?.on("periodCreated", handleCreated);
+    socket?.on("resultsPublished", handlePublished);
+    socket?.on("voteUpdate", handleVote);
 
     return () => {
-      s?.off("resultsPublished", onPublished);
-      s?.off("voteUpdate", onVote);
+      socket?.off("periodCreated", handleCreated);
+      socket?.off("resultsPublished", handlePublished);
+      socket?.off("voteUpdate", handleVote);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- refresh live every 5s when sessions change ----
   useEffect(() => {
     clearInterval(liveTimer.current);
-    liveTimer.current = setInterval(refreshLive, 5000);
+    liveTimer.current = setInterval(refreshLive, 6000);
     refreshLive();
     return () => clearInterval(liveTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions]);
 
-  const isActive = (p) => {
+  const isActive = (period) => {
     const now = Date.now();
-    return (
-      now >= new Date(p.startTime).getTime() &&
-      now < new Date(p.endTime).getTime() &&
-      !p.resultsPublished
-    );
+    return now >= new Date(period.startTime).getTime() && now < new Date(period.endTime).getTime() && !period.resultsPublished;
   };
-  const isUpcoming = (p) =>
-    Date.now() < new Date(p.startTime).getTime() && !p.resultsPublished;
-  const isEndedUnpublished = (p) =>
-    Date.now() >= new Date(p.endTime).getTime() && !p.resultsPublished;
+  const isUpcoming = (period) => Date.now() < new Date(period.startTime).getTime() && !period.resultsPublished;
+  const awaitingPublish = (period) => Date.now() >= new Date(period.endTime).getTime() && !period.resultsPublished;
 
-  // ---------- data loaders ----------
+  const stats = useMemo(() => ({
+    active: sessions.filter(isActive).length,
+    upcoming: sessions.filter(isUpcoming).length,
+    awaiting: sessions.filter(awaitingPublish).length,
+  }), [sessions]);
+
+  const activeSessions = useMemo(() => sessions.filter(isActive), [sessions]);
+  const awaitingSessions = useMemo(() => sessions.filter(awaitingPublish), [sessions]);
+  const upcomingSessions = useMemo(() => sessions.filter(isUpcoming), [sessions]);
+
+  useEffect(() => {
+    statsRef.current = stats;
+  }, [stats]);
+
+
+  useEffect(() => {
+    if (!selPast) return;
+    const match = sessions.find((period) => period.id === selPast.id);
+    if (!match) {
+      setSelPast(null);
+      setPastCands([]);
+      setAudit(null);
+    } else {
+      setSelPast(match);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions]);
   async function loadUnpublished() {
     setUnpubLoading(true);
     try {
@@ -132,7 +156,7 @@ export default function Admin() {
       setUnpublished(Array.isArray(data) ? data : []);
     } catch (e) {
       setUnpublished([]);
-      notifyError(e.message || "Failed to load unpublished");
+      notifyError(e.message || "Failed to load unpublished candidates");
     } finally {
       setUnpubLoading(false);
     }
@@ -142,7 +166,9 @@ export default function Admin() {
     setLoadingSessions(true);
     try {
       const data = await apiGet("/api/admin/periods");
-      setSessions(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      sessionsRef.current = list;
+      setSessions(list);
     } catch (e) {
       setSessions([]);
       notifyError(e.message || "Failed to load sessions");
@@ -151,37 +177,34 @@ export default function Admin() {
     }
   }
 
-  // ---------- upload photo (FormData; includes credentials; keeps legacy Bearer) ----------
-  async function uploadImage(file) {
+  async function uploadCandidateImage(file) {
     const fd = new FormData();
     fd.append("file", file);
-
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
-
     const res = await fetch(`${API_BASE}/api/admin/upload-image`, {
       method: "POST",
-      body: fd,
       headers,
+      body: fd,
       credentials: "include",
     });
-    const d = await safeJson(res);
-    if (!res.ok || !d?.success) throw new Error(d?.message || "Upload failed");
-    return d.url; // /uploads/candidates/xxx.jpg
+    const json = await safeJson(res);
+    if (!res.ok || !json?.success) throw new Error(json?.message || "Failed to upload image");
+    return json.url;
   }
 
-  async function onPickImage(e) {
-    const f = e.target.files?.[0];
+  async function handlePickImage(e) {
+    const file = e.target.files?.[0];
     e.target.value = "";
-    if (!f) return;
-    if (!["image/png", "image/jpeg"].includes(f.type)) {
-      notifyError("Only PNG/JPEG allowed");
+    if (!file) return;
+    if (!/image\/(png|jpe?g)/i.test(file.type)) {
+      notifyError("Only PNG or JPEG images are allowed");
       return;
     }
     try {
-      const url = await uploadImage(f);
+      const url = await uploadCandidateImage(file);
       setCPhotoUrl(url);
-      notifySuccess("Photo uploaded");
+      notifySuccess("Candidate photo uploaded");
     } catch (err) {
       notifyError(err.message);
     }
@@ -190,17 +213,18 @@ export default function Admin() {
   async function addCandidate(e) {
     e.preventDefault();
     if (!cName.trim() || !cState || !cLga) {
-      notifyError("All candidate fields are required");
+      notifyError("Fill in all candidate details");
       return;
     }
     try {
-      const d = await apiPost("/api/admin/candidate", {
+      const payload = {
         name: cName.trim(),
         state: cState,
         lga: cLga,
         photoUrl: cPhotoUrl || null,
-      });
-      if (!d?.success) throw new Error(d?.message || "Error adding candidate");
+      };
+      const resp = await apiPost("/api/admin/candidate", payload);
+      if (!resp?.success) throw new Error(resp?.message || "Unable to add candidate");
       setCName("");
       setCState("");
       setCLga("");
@@ -213,28 +237,35 @@ export default function Admin() {
   }
 
   async function startVoting() {
-    if (!title || !start || !end) return notifyError("Enter title, start, end");
-    if (unpublished.length === 0)
-      return notifyError("Add at least one candidate");
-    if (scope === "state" && !scopeState)
-      return notifyError("Select state for a state election");
-    if (scope === "local" && (!scopeState || !scopeLGA))
-      return notifyError("Select state & LGA for a local election");
-
-    const body = {
-      title,
-      description,
-      start,
-      end,
-      minAge: Math.max(Number(minAge || 18), 18),
-      scope, // 'national' | 'state' | 'local'
-      scopeState: scope !== "national" ? scopeState : null,
-      scopeLGA: scope === "local" ? scopeLGA : null,
-    };
+    if (!title.trim() || !start || !end) {
+      notifyError("Please provide title, start, and end times");
+      return;
+    }
+    if (unpublished.length === 0) {
+      notifyError("Add at least one candidate before starting a session");
+      return;
+    }
+    if (scope === "state" && !scopeState) {
+      notifyError("Select a state for this election scope");
+      return;
+    }
+    if (scope === "local" && (!scopeState || !scopeLGA)) {
+      notifyError("Select both state and LGA for a local election");
+      return;
+    }
     try {
-      const d = await apiPost("/api/admin/voting-period", body);
-      if (!d?.success) throw new Error(d?.message || "Failed to start session");
-      // reset
+      const body = {
+        title: title.trim(),
+        description: description?.trim() || null,
+        start,
+        end,
+        minAge: Math.max(Number(minAge || 18), 18),
+        scope,
+        scopeState: scope !== "national" ? scopeState : null,
+        scopeLGA: scope === "local" ? scopeLGA : null,
+      };
+      const resp = await apiPost("/api/admin/voting-period", body);
+      if (!resp?.success) throw new Error(resp?.message || "Failed to start voting period");
       setTitle("");
       setDescription("");
       setStart("");
@@ -243,231 +274,220 @@ export default function Admin() {
       setScope("national");
       setScopeState("");
       setScopeLGA("");
-      await loadUnpublished();
-      await loadSessions();
+      await Promise.all([loadUnpublished(), loadSessions()]);
       notifySuccess("Voting session started");
-    } catch (e) {
-      notifyError(e.message);
+    } catch (err) {
+      notifyError(err.message);
     }
   }
 
-  async function endEarly() {
+  async function endVotingEarly(period) {
     try {
-      const d = await apiPost("/api/admin/end-voting-early", {});
-      if (!d?.success) throw new Error(d?.message || "Failed to end");
-      await loadSessions();
-      notifySuccess("Voting ended");
-    } catch (e) {
-      notifyError(e.message);
+      const resp = await apiPost("/api/admin/end-voting-early", period ? { periodId: period.id } : {});
+      if (!resp?.success && !resp?.already) throw new Error(resp?.message || "Failed to end voting early");
+      await Promise.all([loadSessions(), loadUnpublished()]);
+      setCName("");
+      setCState("");
+      setCLga("");
+      setCPhotoUrl("");
+      if (resp?.already) {
+        notifySuccess("Session already ended");
+      } else {
+        notifySuccess("Voting ended for the session");
+      }
+    } catch (err) {
+      notifyError(err.message);
     }
   }
 
-  async function publishResults() {
+  async function publishResults(period) {
     try {
-      const d = await apiPost("/api/admin/publish-results", {});
-      if (!d?.success) throw new Error(d?.message || "Failed to publish");
-      await loadSessions();
-      notifySuccess("Results published");
-    } catch (e) {
-      notifyError(e.message);
-    }
-  }
-
-  async function viewPast(p) {
-    setSelPast(p);
-    setPastCands([]);
-    setAudit(null);
-    try {
-      const [cands, aud] = await Promise.all([
-        apiGet(`/api/admin/candidates?periodId=${p.id}`),
-        apiGet(`/api/admin/audit?periodId=${p.id}`),
-      ]);
-      setPastCands(Array.isArray(cands) ? cands : []);
-      setAudit(aud || null);
-    } catch {
-      notifyError("Failed to load session details");
+      const resp = await apiPost("/api/admin/publish-results", period ? { periodId: period.id } : {});
+      if (!resp?.success && !resp?.already) throw new Error(resp?.message || "Failed to publish results");
+      await Promise.all([loadSessions(), loadUnpublished()]);
+      setCName("");
+      setCState("");
+      setCLga("");
+      setCPhotoUrl("");
+      if (resp?.already) {
+        notifySuccess("Results were already published for this session");
+      } else {
+        notifySuccess("Results published");
+      }
+    } catch (err) {
+      notifyError(err.message);
     }
   }
 
   async function deleteSession(id) {
     try {
-      const d = await apiDelete(`/api/admin/periods/delete?periodId=${id}`);
-      if (!d?.success) throw new Error(d?.message || "Delete failed");
+      const resp = await apiDelete(`/api/admin/periods/delete?periodId=${id}`);
+      if (!resp?.success) throw new Error(resp?.message || "Failed to delete session");
       setSelPast(null);
-      await loadSessions();
+      await Promise.all([loadSessions(), loadUnpublished()]);
+      setCName("");
+      setCState("");
+      setCLga("");
+      setCPhotoUrl("");
       notifySuccess("Session deleted");
-    } catch (e) {
-      notifyError(e.message);
+    } catch (err) {
+      notifyError(err.message);
     }
   }
 
   async function refreshLive() {
     try {
-      const actives = sessions.filter(isActive);
-      const out = [];
-      for (const p of actives) {
-        const arr = await apiGet(`/api/admin/candidates?periodId=${p.id}`);
-        if (Array.isArray(arr)) out.push({ period: p, candidates: arr });
+      const activeSessions = sessions.filter(isActive);
+      const scoreboard = [];
+      for (const period of activeSessions) {
+        const candidates = await apiGet(`/api/admin/candidates?periodId=${period.id}`);
+        if (Array.isArray(candidates)) {
+          scoreboard.push({ period, candidates });
+        }
       }
-      setLive(out);
-    } catch {
+      setLive(scoreboard);
+    } catch (err) {
       setLive([]);
     }
   }
 
+  async function viewPast(period) {
+    setSelPast(period);
+    setPastCands([]);
+    setAudit(null);
+    try {
+      const [candidateRows, auditData] = await Promise.all([
+        apiGet(`/api/admin/candidates?periodId=${period.id}`),
+        apiGet(`/api/admin/audit?periodId=${period.id}`),
+      ]);
+      setPastCands(Array.isArray(candidateRows) ? candidateRows : []);
+      setAudit(auditData || null);
+    } catch (err) {
+      notifyError("Failed to load session details");
+    }
+  }
+
+  const confirmCopy = useMemo(() => {
+    if (!pendingAction) return { title: "", message: "" };
+    if (pendingAction.type === "publish") {
+      return {
+        title: "Publish results",
+        message: `Publish and announce results for ${pendingAction.period.title || `Session #${pendingAction.period.id}`}? This makes the outcome visible to every voter.`,
+        tone: "indigo",
+      };
+    }
+    if (pendingAction.type === "end") {
+      return {
+        title: "End voting early",
+        message: `Force-close voting for ${pendingAction.period.title || `Session #${pendingAction.period.id}`}. Voters will no longer be able to submit ballots after this action.`,
+        tone: "danger",
+      };
+    }
+    if (pendingAction.type === "delete") {
+      return {
+        title: "Delete session",
+        message: `Permanently remove ${pendingAction.period.title || `Session #${pendingAction.period.id}`}, its votes, and detach candidates. This cannot be undone.`,
+        tone: "danger",
+      };
+    }
+    return { title: "Confirm", message: "" };
+  }, [pendingAction]);
+
+  const handleConfirmAction = async () => {
+    if (!pendingAction) return;
+    try {
+      if (pendingAction.type === "publish") await publishResults(pendingAction.period);
+      if (pendingAction.type === "end") await endVotingEarly(pendingAction.period);
+      if (pendingAction.type === "delete") await deleteSession(pendingAction.period.id);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const candidateState = states.find((s) => s.label === cState);
+  const candidateLgas = candidateState?.lgas || [];
+
   return (
-    <div className="max-w-7xl mx-auto px-4 py-4">
-      {/* Tabs */}
-      <div className="flex gap-2 border-b pb-2 sticky top-0 bg-white z-10">
-        {["overview", "candidates", "start", "live", "past", "logs"].map(
-          (key) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`px-4 py-2 rounded-t transition ${
-                tab === key
-                  ? "bg-white border border-b-transparent shadow-sm"
-                  : "bg-gray-200 hover:bg-gray-300"
-              }`}
-            >
-              {key === "overview"
-                ? "Dashboard"
-                : key === "candidates"
-                ? "Candidates"
-                : key === "start"
-                ? "Start Session"
-                : key === "live"
-                ? "Live"
-                : key === "past"
-                ? "Previous Sessions"
-                : "Logs"}
-            </button>
-          )
-        )}
-      </div>
-
-      {/* OVERVIEW */}
-      {tab === "overview" && (
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card title="Active Sessions">
-            <BigNumber>{sessions.filter(isActive).length}</BigNumber>
-          </Card>
-          <Card title="Upcoming Sessions">
-            <BigNumber>{sessions.filter(isUpcoming).length}</BigNumber>
-          </Card>
-          <Card title="Ended (Unpublished)">
-            <BigNumber>{sessions.filter(isEndedUnpublished).length}</BigNumber>
-          </Card>
-
-          <div className="md:col-span-3 bg-white rounded-2xl shadow p-5">
-            <h3 className="font-bold mb-2">In Progress</h3>
-            {loadingSessions ? (
-              <div className="text-gray-500 animate-pulse">Loading…</div>
-            ) : (
-              <>
-                {sessions.filter(
-                  (p) =>
-                    !p.resultsPublished &&
-                    (isActive(p) ||
-                      isUpcoming(p) ||
-                      isEndedUnpublished(p) ||
-                      p.forcedEnded)
-                ).length === 0 ? (
-                  <div className="text-gray-500">No sessions in progress.</div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {sessions
-                      .filter(
-                        (p) =>
-                          !p.resultsPublished &&
-                          (isActive(p) ||
-                            isUpcoming(p) ||
-                            isEndedUnpublished(p) ||
-                            p.forcedEnded)
-                      )
-                      .map((p) => (
-                        <div
-                          key={p.id}
-                          className="border rounded-xl p-4 bg-gray-50"
-                        >
-                          <div className="font-semibold">
-                            {p.title || `Session #${p.id}`}
-                          </div>
-                          <div className="text-sm text-gray-600">
-                            {new Date(p.startTime).toLocaleString()} —{" "}
-                            {new Date(p.endTime).toLocaleString()}
-                          </div>
-                          <div className="text-xs mt-1">
-                            Scope:{" "}
-                            <span className="font-medium uppercase">
-                              {p.scope}
-                            </span>
-                            {p.scope !== "national" && p.scopeState
-                              ? ` • ${p.scopeState}`
-                              : ""}
-                            {p.scope === "local" && p.scopeLGA
-                              ? ` • ${p.scopeLGA}`
-                              : ""}
-                          </div>
-
-                          <div className="mt-3 flex gap-2">
-                            {isActive(p) && (
-                              <button
-                                onClick={endEarly}
-                                className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700"
-                              >
-                                End Early
-                              </button>
-                            )}
-                            {isEndedUnpublished(p) && (
-                              <button
-                                onClick={publishResults}
-                                className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-                              >
-                                Publish Results
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </>
-            )}
+    <div className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6">
+      <header className="rounded-[2.5rem] border border-slate-200 bg-white px-6 py-10 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur md:px-10">
+        <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-2">
+            <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Admin console</p>
+            <h1 className="text-3xl font-semibold text-slate-900">Election control centre</h1>
+            <p className="text-sm text-slate-500 md:max-w-xl">
+              Create sessions, manage candidates, oversee live participation, and publish results in one streamlined workspace.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-center text-sm">
+            <StatPill label="Active" value={stats.active} tone="emerald" />
+            <StatPill label="Upcoming" value={stats.upcoming} tone="sky" />
+            <StatPill label="Awaiting publish" value={stats.awaiting} tone="amber" />
           </div>
         </div>
+      </header>
+
+      <nav className="-mb-1 flex flex-wrap gap-2 overflow-x-auto rounded-2xl border border-slate-300 bg-white px-4 py-3 shadow-sm backdrop-blur">
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setTab(item.id)}
+            className={`rounded-full border px-4 py-2 text-base font-semibold transition ${
+              tab === item.id
+                ? "border-indigo-200 bg-indigo-50 text-indigo-700 shadow"
+                : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "overview" && (
+        <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+          <div className="grid gap-6 md:grid-cols-2">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Snapshot</h2>
+              <p className="mt-1 text-sm text-slate-500">A quick look at what’s happening right now.</p>
+              <ul className="mt-4 space-y-3 text-sm text-slate-600">
+                <li>Active sessions: <span className="font-semibold text-slate-900">{stats.active}</span></li>
+                <li>Awaiting publish: <span className="font-semibold text-slate-900">{stats.awaiting}</span></li>
+                <li>Upcoming sessions: <span className="font-semibold text-slate-900">{stats.upcoming}</span></li>
+              </ul>
+            </div>
+            <div className="space-y-4">
+              <OverviewList title="Live now" sessions={activeSessions} emptyText="No sessions currently accepting votes." badge="Active" />
+              <OverviewList title="Awaiting publish" sessions={awaitingSessions} emptyText="Nothing waiting to be published." badge="Ready" />
+              <OverviewList title="Starting soon" sessions={upcomingSessions} emptyText="No upcoming sessions scheduled." badge="Upcoming" />
+            </div>
+          </div>
+        </section>
       )}
 
-      {/* CANDIDATES */}
       {tab === "candidates" && (
-        <div className="mt-4 space-y-6">
-          <div className="bg-white rounded-2xl shadow p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-bold">Add Candidate</h2>
-              <button
-                onClick={loadUnpublished}
-                className="text-sm px-3 py-1 rounded border hover:bg-gray-50"
-              >
-                Reload
-              </button>
+      <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+        <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+          <form onSubmit={addCandidate} className="w-full space-y-4 md:max-w-xl">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Add candidate</h2>
+              <p className="text-sm text-slate-500">Prepare contenders before attaching them to a voting session.</p>
             </div>
-            <form
-              onSubmit={addCandidate}
-              className="grid grid-cols-1 md:grid-cols-4 gap-3"
-            >
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="md:col-span-2">
-                <label className="text-xs text-gray-600">Name</label>
+                <label className="form-label" htmlFor="candidate-name">Full name</label>
                 <input
-                  className="border p-2 rounded w-full"
+                  id="candidate-name"
+                  className="form-control"
                   value={cName}
                   onChange={(e) => setCName(e.target.value)}
                   placeholder="Candidate name"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-600">State</label>
+                <label className="form-label" htmlFor="candidate-state">State</label>
                 <select
-                  className="border p-2 rounded w-full"
+                  id="candidate-state"
+                  className="form-control"
                   value={cState}
                   onChange={(e) => {
                     setCState(e.target.value);
@@ -475,505 +495,449 @@ export default function Admin() {
                   }}
                 >
                   <option value="">Select state…</option>
-                  {allStates.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
+                  {states.map((state) => (
+                    <option key={state.label} value={state.label}>
+                      {state.label}
                     </option>
                   ))}
                 </select>
               </div>
               <div>
-                <label className="text-xs text-gray-600">LGA</label>
+                <label className="form-label" htmlFor="candidate-lga">LGA</label>
                 <select
-                  className="border p-2 rounded w-full"
+                  id="candidate-lga"
+                  className="form-control"
                   value={cLga}
                   onChange={(e) => setCLga(e.target.value)}
                   disabled={!cState}
                 >
-                  <option value="">
-                    {cState ? "Select LGA…" : "Pick state first"}
-                  </option>
-                  {candLgas.map((l) => (
-                    <option key={l} value={l}>
-                      {l}
+                  <option value="">{cState ? "Select LGA…" : "Pick a state first"}</option>
+                  {candidateLgas.map((lga) => (
+                    <option key={lga} value={lga}>
+                      {lga}
                     </option>
                   ))}
                 </select>
               </div>
-              <div className="md:col-span-3">
-                <label className="text-xs text-gray-600">Photo</label>
-                <div className="flex gap-2">
+              <div className="md:col-span-2">
+                <label className="form-label" htmlFor="candidate-photo">Photo</label>
+                <div className="flex gap-3">
                   <input
-                    className="border p-2 rounded w-full"
+                    id="candidate-photo"
+                    className="form-control"
                     placeholder="Photo URL (auto-filled after upload)"
                     value={cPhotoUrl}
                     onChange={(e) => setCPhotoUrl(e.target.value)}
                   />
-                  <label className="px-3 py-2 rounded border cursor-pointer hover:bg-gray-50">
+                  <label className="btn-secondary cursor-pointer px-4">
                     Upload
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg"
-                      className="hidden"
-                      onChange={onPickImage}
-                    />
+                    <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handlePickImage} />
                   </label>
                 </div>
               </div>
-              <div className="md:col-span-1">
-                <label className="text-xs text-gray-600 opacity-0">
-                  submit
-                </label>
-                <button className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                  Add Candidate
-                </button>
-              </div>
-            </form>
-          </div>
+            </div>
+            <button type="submit" className="btn-primary">Add candidate</button>
+          </form>
 
-          <div className="bg-white rounded-2xl shadow p-5">
-            <h2 className="text-lg font-bold mb-3">Unpublished Candidates</h2>
-            {unpubLoading ? (
-              <div className="text-gray-500 animate-pulse">Loading…</div>
-            ) : unpublished.length === 0 ? (
-              <div className="text-gray-500">No unpublished candidates</div>
+          <div className="flex-1 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-900">Unpublished candidates</h3>
+              <button type="button" onClick={loadUnpublished} className="btn-secondary px-4 py-2 text-xs">Reload</button>
+            </div>
+            <div className="mt-4 space-y-3">
+              {unpubLoading ? (
+                <div className="text-sm text-slate-500 animate-pulse">Loading…</div>
+              ) : unpublished.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                  Added candidates will appear here until they are assigned to a session.
+                </div>
+              ) : (
+                unpublished.map((candidate) => (
+                  <div key={candidate.id} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
+                    <img
+                      src={absUrl(candidate.photoUrl || "/placeholder.png")}
+                      alt={candidate.name}
+                      className="h-12 w-12 rounded-full object-cover ring-1 ring-slate-200/70"
+                    />
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
+                      <div className="text-xs text-slate-500">{candidate.state} • {candidate.lga}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+      )}
+
+
+      {tab === "sessions" && (
+      <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="space-y-2 md:max-w-sm">
+            <h2 className="text-lg font-semibold text-slate-900">Start a voting session</h2>
+            <p className="text-sm text-slate-500">Schedule start and end times, set eligibility, and launch when you are ready.</p>
+          </div>
+          <div className="w-full md:max-w-2xl">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="form-label" htmlFor="session-title">Title</label>
+                <input id="session-title" className="form-control" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Eg. Presidential Primaries" />
+              </div>
+              <div className="md:col-span-2">
+                <label className="form-label" htmlFor="session-description">Description</label>
+                <textarea id="session-description" className="form-control min-h-[96px]" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional summary" />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="session-start">Start time</label>
+                <input id="session-start" type="datetime-local" className="form-control" value={start} onChange={(e) => setStart(e.target.value)} />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="session-end">End time</label>
+                <input id="session-end" type="datetime-local" className="form-control" value={end} onChange={(e) => setEnd(e.target.value)} />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="session-age">Minimum age</label>
+                <input id="session-age" type="number" min={18} className="form-control" value={minAge} onChange={(e) => setMinAge(e.target.value)} />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="session-scope">Scope</label>
+                <select id="session-scope" className="form-control" value={scope} onChange={(e) => setScope(e.target.value)}>
+                  <option value="national">National</option>
+                  <option value="state">State</option>
+                  <option value="local">Local</option>
+                </select>
+              </div>
+              {scope !== "national" && (
+                <div>
+                  <label className="form-label" htmlFor="session-scope-state">Scope state</label>
+                  <select id="session-scope-state" className="form-control" value={scopeState} onChange={(e) => setScopeState(e.target.value)}>
+                    <option value="">Select state…</option>
+                    {states.map((state) => (
+                      <option key={state.label} value={state.label}>
+                        {state.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {scope === "local" && (
+                <div>
+                  <label className="form-label" htmlFor="session-scope-lga">Scope LGA</label>
+                  <select id="session-scope-lga" className="form-control" value={scopeLGA} onChange={(e) => setScopeLGA(e.target.value)}>
+                    <option value="">Select LGA…</option>
+                    {states
+                      .find((state) => state.label === scopeState)?.lgas?.map((lga) => (
+                        <option key={lga} value={lga}>
+                          {lga}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+            </div>
+            <div className="mt-4">
+              <button type="button" className="btn-primary" onClick={startVoting}>
+                Launch session
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+      )}
+
+
+{tab === "sessions" && (
+      <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">In-progress sessions</h2>
+            <p className="text-sm text-slate-500">Monitor live elections and trigger administrative actions.</p>
+          </div>
+          <button type="button" onClick={loadSessions} className="btn-secondary px-4 py-2 text-xs">
+            Refresh
+          </button>
+        </div>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          {loadingSessions ? (
+            <div className="col-span-full text-sm text-slate-500 animate-pulse">Loading sessions…</div>
+          ) : sessions.filter((period) => awaitingPublish(period) || isUpcoming(period)).length === 0 ? (
+            <div className="col-span-full rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+              No upcoming or unpublished sessions at the moment.
+            </div>
+          ) : (
+            sessions
+              .filter((period) => awaitingPublish(period) || isUpcoming(period))
+              .map((period) => (
+                <div key={period.id} className="flex h-full flex-col justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-semibold text-slate-900">{period.title || `Session #${period.id}`}</h3>
+                      <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase text-indigo-600">
+                        {awaitingPublish(period) ? "Awaiting publish" : "Upcoming"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {new Date(period.startTime).toLocaleString()} — {new Date(period.endTime).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Scope: <span className="font-medium uppercase text-slate-800">{period.scope}</span>
+                      {period.scope !== "national" && period.scopeState ? ` • ${period.scopeState}` : ""}
+                      {period.scope === "local" && period.scopeLGA ? ` • ${period.scopeLGA}` : ""}
+                    </p>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {awaitingPublish(period) && (
+                      <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period })}>
+                        Publish results
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+          )}
+        </div>
+      </section>
+      )}
+
+      {tab === "live" && (
+        <LivePanel live={live} refresh={refreshLive} />
+      )}
+
+      {tab === "archive" && (
+      <section className="grid gap-6 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:grid-cols-2 md:p-8">
+        <div>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Previous sessions</h2>
+              <p className="text-sm text-slate-500">Review ended elections and audit their results.</p>
+            </div>
+            <button type="button" onClick={loadSessions} className="btn-secondary px-3 py-2 text-xs">
+              Reload
+            </button>
+          </div>
+          <div className="mt-4 space-y-2">
+            {loadingSessions ? (
+              <div className="text-sm text-slate-500 animate-pulse">Loading sessions…</div>
+            ) : sessions.filter((period) => period.resultsPublished || (!isActive(period) && !isUpcoming(period) && !awaitingPublish(period))).length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                Once results are published, sessions will appear here for reference.
+              </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {unpublished.map((c) => (
-                  <div
-                    key={c.id}
-                    className="border rounded p-3 flex items-center justify-between bg-gray-50"
+              sessions
+                .filter((period) => period.resultsPublished || (!isActive(period) && !isUpcoming(period) && !awaitingPublish(period)))
+                .map((period) => (
+                  <button
+                    key={period.id}
+                    type="button"
+                    onClick={() => viewPast(period)}
+                    className={`w-full rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md ${selPast?.id === period.id ? "border-indigo-300 bg-indigo-50" : "border-slate-100 bg-white"}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={absUrl(c.photoUrl || "/placeholder.png")}
-                        className="w-12 h-12 rounded object-cover"
-                        alt={c.name}
-                      />
-                      <div>
-                        <div className="font-semibold">{c.name}</div>
-                        <div className="text-sm text-gray-600">
-                          {c.state} • {c.lga}
+                    <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
+                    <div className="text-xs text-slate-500">
+                      {new Date(period.startTime).toLocaleString()} — {new Date(period.endTime).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      Scope: {period.scope}
+                      {period.scope !== "national" && period.scopeState ? ` • ${period.scopeState}` : ""}
+                      {period.scope === "local" && period.scopeLGA ? ` • ${period.scopeLGA}` : ""}
+                    </div>
+                  </button>
+                ))
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-slate-900">Session details</h2>
+          {!selPast ? (
+            <p className="mt-3 text-sm text-slate-500">Select a session to view candidate totals and audit insights.</p>
+          ) : (
+            <div className="mt-3 space-y-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">{selPast.title || `Session #${selPast.id}`}</div>
+                <div className="text-xs text-slate-500">
+                  {new Date(selPast.startTime).toLocaleString()} — {new Date(selPast.endTime).toLocaleString()}
+                </div>
+                <div className="text-xs text-slate-500">
+                  Scope: {selPast.scope}
+                  {selPast.scope !== "national" && selPast.scopeState ? ` • ${selPast.scopeState}` : ""}
+                  {selPast.scope === "local" && selPast.scopeLGA ? ` • ${selPast.scopeLGA}` : ""}
+                </div>
+              </div>
+
+              {audit && (
+                <div className="rounded-2xl border border-slate-100 bg-white p-4 text-xs text-slate-500">
+                  <div className="text-sm font-semibold text-slate-900">Audit summary</div>
+                  <p>Total candidates: {audit.candidateCount}</p>
+                  <p>Total vote rows: {audit.voteRows}</p>
+                  <p>Total candidate votes: {audit.candidateVotes}</p>
+                  <p>
+                    Consistent: <span className={audit.consistent ? "text-emerald-600 font-semibold" : "text-rose-600 font-semibold"}>{audit.consistent ? "Yes" : "Mismatch"}</span>
+                  </p>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {pastCands.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">No candidate data for this session yet.</div>
+                ) : (
+                  pastCands.map((candidate) => (
+                    <div key={candidate.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-3">
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={absUrl(candidate.photoUrl || "/placeholder.png")}
+                          alt={candidate.name}
+                          className="h-10 w-10 rounded-full object-cover ring-1 ring-slate-200/70"
+                        />
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
+                          <div className="text-xs text-slate-500">{candidate.state} • {candidate.lga}</div>
                         </div>
                       </div>
+                      <span className="text-sm font-semibold text-slate-900">{candidate.votes} votes</span>
                     </div>
-                    <button
-                      onClick={() =>
-                        setConfirm({ type: "deleteCandidate", id: c.id })
-                      }
-                      className="text-white bg-red-600 px-3 py-1 rounded hover:bg-red-700"
-                    >
-                      Delete
-                    </button>
+                  ))
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {!selPast.resultsPublished && (
+                  <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period: selPast })}>
+                    Publish results
+                  </button>
+                )}
+                <button type="button" className="btn-secondary" onClick={() => setPendingAction({ type: "delete", period: selPast })}>
+                  Delete session
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+      )}
+
+
+      {tab === "logs" && <LogsPanel />}
+
+      <ConfirmDialog
+        open={!!pendingAction}
+        title={confirmCopy.title}
+        message={confirmCopy.message}
+        confirmLabel={pendingAction?.type === "delete" ? "Delete" : pendingAction?.type === "end" ? "End session" : "Publish"}
+        cancelLabel="Cancel"
+        tone={confirmCopy.tone === "danger" ? "danger" : "indigo"}
+        onConfirm={handleConfirmAction}
+        onCancel={() => setPendingAction(null)}
+      />
+    </div>
+  );
+}
+
+function OverviewList({ title, sessions, emptyText, badge }) {
+  const items = (sessions || []).slice(0, 3);
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase text-slate-600">{badge}</span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-slate-500">{emptyText}</p>
+      ) : (
+        <ul className="space-y-2 text-xs text-slate-600">
+          {items.map((session) => (
+            <li key={session.id} className="flex flex-col">
+              <span className="font-semibold text-slate-900">{session.title || `Session #${session.id}`}</span>
+              <span>{new Date(session.startTime).toLocaleString()} — {new Date(session.endTime).toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
+function StatPill({ label, value, tone }) {
+  const toneMap = {
+    emerald: "bg-emerald-50 text-emerald-600",
+    sky: "bg-sky-50 text-sky-600",
+    amber: "bg-amber-50 text-amber-600",
+  };
+  return (
+    <div className={`rounded-2xl px-4 py-3 shadow-sm ${toneMap[tone] || "bg-slate-50 text-slate-600"}`}>
+      <div className="text-xs uppercase tracking-wide">{label}</div>
+      <div className="text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function LivePanel({ live, refresh }) {
+  return (
+    <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Live participation</h2>
+          <p className="text-sm text-slate-500">Active sessions refresh every few seconds. Manually refresh for an instant snapshot.</p>
+        </div>
+        <button type="button" onClick={refresh} className="btn-secondary px-4 py-2 text-xs">
+          Refresh now
+        </button>
+      </div>
+      <div className="mt-4 space-y-4">
+        {live.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+            No votes coming in right now. Active sessions will appear here automatically.
+          </div>
+        ) : (
+          live.map(({ period, candidates }) => (
+            <div key={period.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
+                  <div className="text-xs text-slate-500">Ends {new Date(period.endTime).toLocaleString()}</div>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase text-emerald-600">Live</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {candidates.map((candidate) => (
+                  <div key={candidate.id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3">
+                    <span className="text-sm font-medium text-slate-900">{candidate.name}</span>
+                    <span className="text-sm font-semibold text-slate-900">{candidate.votes} votes</span>
                   </div>
                 ))}
               </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* START SESSION */}
-      {tab === "start" && (
-        <div className="mt-4 bg-white rounded-2xl shadow p-5">
-          <h2 className="text-lg font-bold mb-3">Start New Voting Session</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="md:col-span-2">
-              <label className="text-xs text-gray-600">Title</label>
-              <input
-                className="border p-2 rounded w-full"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g., Presidential Election 2025"
-              />
             </div>
-            <div className="md:col-span-2">
-              <label className="text-xs text-gray-600">Description</label>
-              <textarea
-                className="border p-2 rounded w-full"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional summary…"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-gray-600">Scope</label>
-              <select
-                className="border p-2 rounded w-full"
-                value={scope}
-                onChange={(e) => {
-                  setScope(e.target.value);
-                  setScopeState("");
-                  setScopeLGA("");
-                }}
-              >
-                <option value="national">National</option>
-                <option value="state">State</option>
-                <option value="local">Local Government</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-gray-600">Minimum Age</label>
-              <input
-                type="number"
-                min={18}
-                className="border p-2 rounded w-full"
-                value={minAge}
-                onChange={(e) => setMinAge(e.target.value)}
-              />
-            </div>
-
-            {(scope === "state" || scope === "local") && (
-              <div>
-                <label className="text-xs text-gray-600">State</label>
-                <select
-                  className="border p-2 rounded w-full"
-                  value={scopeState}
-                  onChange={(e) => {
-                    setScopeState(e.target.value);
-                    setScopeLGA("");
-                  }}
-                >
-                  <option value="">Select state…</option>
-                  {allStates.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {scope === "local" && (
-              <div>
-                <label className="text-xs text-gray-600">LGA</label>
-                <select
-                  className="border p-2 rounded w-full"
-                  value={scopeLGA}
-                  onChange={(e) => setScopeLGA(e.target.value)}
-                  disabled={!scopeState}
-                >
-                  <option value="">
-                    {scopeState ? "Select LGA…" : "Pick state first"}
-                  </option>
-                  {(
-                    base.find((x) => stateLabel(x) === scopeState)?.lgas || []
-                  ).map((l) => (
-                    <option key={l} value={l}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div>
-              <label className="text-xs text-gray-600">Start</label>
-              <input
-                type="datetime-local"
-                className="border p-2 rounded w-full"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-600">End</label>
-              <input
-                type="datetime-local"
-                className="border p-2 rounded w-full"
-                value={end}
-                onChange={(e) => setEnd(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <button
-              onClick={startVoting}
-              className={`px-4 py-2 rounded text-white ${
-                unpublished.length === 0 || !title || !start || !end
-                  ? "bg-gray-400"
-                  : "bg-indigo-600 hover:bg-indigo-700"
-              }`}
-              disabled={
-                unpublished.length === 0 || !title || !start || !end
-              }
-            >
-              Start Voting
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* LIVE */}
-      {tab === "live" && (
-        <div className="mt-4 space-y-4">
-          {live.length === 0 ? (
-            <div className="bg-white rounded-2xl shadow p-5 text-gray-500">
-              No active sessions.
-            </div>
-          ) : (
-            live.map((group) => (
-              <div key={group.period.id} className="bg-white rounded-2xl shadow p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="font-bold">{group.period.title}</div>
-                    <div className="text-xs text-gray-600">
-                      Scope:{" "}
-                      <span className="font-medium uppercase">
-                        {group.period.scope}
-                      </span>
-                      {group.period.scope !== "national" &&
-                      group.period.scopeState
-                        ? ` • ${group.period.scopeState}`
-                        : ""}
-                      {group.period.scope === "local" && group.period.scopeLGA
-                        ? ` • ${group.period.scopeLGA}`
-                        : ""}
-                    </div>
-                  </div>
-                  <button
-                    onClick={endEarly}
-                    className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700"
-                  >
-                    End Early
-                  </button>
-                </div>
-                {group.candidates.length === 0 ? (
-                  <div className="text-gray-500">No candidates.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {group.candidates.map((c) => (
-                      <div
-                        key={c.id}
-                        className="flex items-center justify-between border p-2 rounded"
-                      >
-                        <div className="flex items-center gap-3">
-                          <img
-                            src={absUrl(c.photoUrl || "/placeholder.png")}
-                            className="w-8 h-8 rounded object-cover"
-                            alt={c.name}
-                          />
-                          <span className="font-medium">{c.name}</span>
-                          <span className="text-xs text-gray-600">
-                            ({c.state} • {c.lga})
-                          </span>
-                        </div>
-                        <span className="font-semibold">{c.votes}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {/* PAST */}
-      {tab === "past" && (
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white rounded-2xl shadow p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-bold">Previous Sessions</h2>
-              <button
-                onClick={loadSessions}
-                className="text-sm px-3 py-1 rounded border hover:bg-gray-50"
-              >
-                Reload
-              </button>
-            </div>
-            {loadingSessions ? (
-              <div className="text-gray-500 animate-pulse">Loading…</div>
-            ) : (
-              <div className="space-y-2">
-                {sessions.filter(
-                  (s) =>
-                    s.resultsPublished ||
-                    (!isActive(s) && !isUpcoming(s) && !isEndedUnpublished(s))
-                ).length === 0 ? (
-                  <div className="text-gray-500">No previous sessions.</div>
-                ) : (
-                  sessions
-                    .filter(
-                      (s) =>
-                        s.resultsPublished ||
-                        (!isActive(s) &&
-                          !isUpcoming(s) &&
-                          !isEndedUnpublished(s))
-                    )
-                    .map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => viewPast(s)}
-                        className={`w-full text-left border rounded p-3 hover:bg-gray-50 transition ${
-                          selPast?.id === s.id
-                            ? "bg-blue-50 border-blue-400"
-                            : ""
-                        }`}
-                      >
-                        <div className="font-semibold">
-                          {s.title || `Session #${s.id}`}
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          {new Date(s.startTime).toLocaleString()} —{" "}
-                          {new Date(s.endTime).toLocaleString()}
-                        </div>
-                        <div className="text-xs">
-                          Scope:{" "}
-                          <span className="font-medium uppercase">
-                            {s.scope}
-                          </span>
-                          {s.scope !== "national" && s.scopeState
-                            ? ` • ${s.scopeState}`
-                            : ""}
-                          {s.scope === "local" && s.scopeLGA
-                            ? ` • ${s.scopeLGA}`
-                            : ""}
-                        </div>
-                      </button>
-                    ))
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="bg-white rounded-2xl shadow p-5">
-            <h2 className="text-lg font-bold mb-3">Session Details</h2>
-            {!selPast ? (
-              <div className="text-gray-500">Select a session.</div>
-            ) : (
-              <>
-                <div className="mb-2">
-                  <div className="font-semibold">
-                    {selPast.title || `Session #${selPast.id}`}
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    {new Date(selPast.startTime).toLocaleString()} —{" "}
-                    {new Date(selPast.endTime).toLocaleString()}
-                  </div>
-                  <div className="text-xs">
-                    Scope:{" "}
-                    <span className="font-medium uppercase">
-                      {selPast.scope}
-                    </span>
-                    {selPast.scope !== "national" && selPast.scopeState
-                      ? ` • ${selPast.scopeState}`
-                      : ""}
-                    {selPast.scope === "local" && selPast.scopeLGA
-                      ? ` • ${selPast.scopeLGA}`
-                      : ""}
-                  </div>
-                </div>
-
-                {audit && (
-                  <div className="mb-3 rounded border p-2 text-sm">
-                    <div className="font-semibold mb-1">Audit</div>
-                    <div>
-                      Total candidate rows:{" "}
-                      {audit.candidateCount ?? audit.candidateVotes}
-                    </div>
-                    <div>Total vote records: {audit.voteRows}</div>
-                    <div>
-                      Consistent:{" "}
-                      <span
-                        className={`font-semibold ${
-                          audit.consistent ? "text-green-700" : "text-red-700"
-                        }`}
-                      >
-                        {audit.consistent ? "Yes" : "No"}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  {pastCands.length === 0 ? (
-                    <div className="text-gray-500">No candidates</div>
-                  ) : (
-                    pastCands.map((c) => (
-                      <div
-                        key={c.id}
-                        className="flex items-center gap-3 border rounded p-2"
-                      >
-                        <img
-                          src={absUrl(c.photoUrl || "/placeholder.png")}
-                          className="w-10 h-10 rounded object-cover"
-                          alt={c.name}
-                        />
-                        <div className="flex-1">
-                          <div className="font-medium">{c.name}</div>
-                          <div className="text-sm text-gray-600">
-                            {c.state} • {c.lga}
-                          </div>
-                        </div>
-                        <div className="font-semibold">{c.votes} votes</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                <div className="mt-4 flex gap-2">
-                  {!selPast.resultsPublished && (
-                    <button
-                      onClick={publishResults}
-                      className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-                    >
-                      Publish Results
-                    </button>
-                  )}
-                  <button
-                    onClick={() => deleteSession(selPast.id)}
-                    className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700"
-                  >
-                    Delete Session
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* LOGS */}
-      {tab === "logs" && <LogsPane />}
-    </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
-function Card({ title, children }) {
-  return (
-    <div className="bg-white rounded-2xl shadow p-5">
-      <div className="text-sm text-gray-600">{title}</div>
-      <div className="text-2xl mt-1">{children}</div>
-    </div>
-  );
-}
-function BigNumber({ children }) {
-  return <span className="text-3xl font-extrabold">{children}</span>;
-}
-
-function LogsPane() {
+function LogsPanel() {
   const [rows, setRows] = useState(null);
 
   useEffect(() => {
     load();
-  }, []); // eslint-disable-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function load() {
     try {
-      const j = await apiGet("/api/admin/logs");
-      if (!Array.isArray(j)) throw new Error("Failed to load logs");
-      setRows(j);
-    } catch (e) {
+      const data = await apiGet("/api/admin/logs");
+      setRows(Array.isArray(data) ? data : []);
+    } catch (err) {
       setRows([]);
     }
   }
 
   async function exportCsv() {
     try {
-      const token =
-        typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       const res = await fetch(`${API_BASE}/api/admin/logs/export`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: "include",
@@ -982,88 +946,73 @@ function LogsPane() {
       if (!res.ok) throw new Error(text?.slice(0, 200) || "Export failed");
       const blob = new Blob([text], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "request_logs.csv";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "request_logs.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
       URL.revokeObjectURL(url);
-      notifySuccess("CSV exported");
-    } catch (e) {
-      notifyError(e.message);
+      notifySuccess("Logs exported");
+    } catch (err) {
+      notifyError(err.message || "Failed to export logs");
     }
   }
 
   return (
-    <div className="mt-4 bg-white rounded-2xl shadow p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-bold">Request Logs</h2>
+    <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Request logs</h2>
+          <p className="text-sm text-slate-500">Inspect the 500 most recent API hits to monitor usage.</p>
+        </div>
         <div className="flex gap-2">
-          <button
-            onClick={load}
-            className="px-3 py-1 rounded border hover:bg-gray-50"
-          >
-            Reload
-          </button>
-          <button
-            onClick={exportCsv}
-            className="px-3 py-1 rounded border hover:bg-gray-50"
-          >
-            Export CSV
-          </button>
+          <button type="button" onClick={load} className="btn-secondary px-4 py-2 text-xs">Reload</button>
+          <button type="button" onClick={exportCsv} className="btn-primary px-4 py-2 text-xs">Export CSV</button>
         </div>
       </div>
-      {!rows ? (
-        <div className="text-gray-500 animate-pulse">Loading…</div>
-      ) : rows.length === 0 ? (
-        <div className="text-gray-500">No logs yet.</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left text-gray-600">
-                <th className="py-2 pr-3">Time</th>
-                <th className="py-2 pr-3">Method</th>
-                <th className="py-2 pr-3">Path</th>
-                <th className="py-2 pr-3">User</th>
-                <th className="py-2 pr-3">IP</th>
-                <th className="py-2 pr-3">Country</th>
-                <th className="py-2 pr-3">City</th>
-                <th className="py-2 pr-3">Agent</th>
-                <th className="py-2 pr-3">Referrer</th>
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-100">
+        {!rows ? (
+          <div className="p-6 text-sm text-slate-500 animate-pulse">Loading logs…</div>
+        ) : rows.length === 0 ? (
+          <div className="p-6 text-sm text-slate-500">No requests captured yet.</div>
+        ) : (
+          <table className="min-w-full divide-y divide-slate-100 text-sm">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">Time</th>
+                <th className="px-3 py-2 text-left font-medium">Method</th>
+                <th className="px-3 py-2 text-left font-medium">Path</th>
+                <th className="px-3 py-2 text-left font-medium">User</th>
+                <th className="px-3 py-2 text-left font-medium">IP</th>
+                <th className="px-3 py-2 text-left font-medium">Country</th>
+                <th className="px-3 py-2 text-left font-medium">City</th>
+                <th className="px-3 py-2 text-left font-medium">Agent</th>
+                <th className="px-3 py-2 text-left font-medium">Referrer</th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <td className="py-2 pr-3">
-                    {new Date(r.createdAt).toLocaleString()}
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((row) => (
+                <tr key={row.id} className="bg-white">
+                  <td className="px-3 py-2">{new Date(row.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-2">{row.method}</td>
+                  <td className="px-3 py-2">{row.path}</td>
+                  <td className="px-3 py-2">{row.userId ?? "-"}</td>
+                  <td className="px-3 py-2">{row.ip}</td>
+                  <td className="px-3 py-2">{row.country || "-"}</td>
+                  <td className="px-3 py-2">{row.city || "-"}</td>
+                  <td className="px-3 py-2 max-w-[220px] truncate" title={row.userAgent}>
+                    {row.userAgent}
                   </td>
-                  <td className="py-2 pr-3">{r.method}</td>
-                  <td className="py-2 pr-3">{r.path}</td>
-                  <td className="py-2 pr-3">{r.userId ?? "-"}</td>
-                  <td className="py-2 pr-3">{r.ip}</td>
-                  <td className="py-2 pr-3">{r.country || "-"}</td>
-                  <td className="py-2 pr-3">{r.city || "-"}</td>
-                  <td
-                    className="py-2 pr-3 truncate max-w-[240px]"
-                    title={r.userAgent}
-                  >
-                    {r.userAgent}
-                  </td>
-                  <td
-                    className="py-2 pr-3 truncate max-w-[240px]"
-                    title={r.referer}
-                  >
-                    {r.referer}
+                  <td className="px-3 py-2 max-w-[220px] truncate" title={row.referer}>
+                    {row.referer}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </section>
   );
 }

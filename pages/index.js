@@ -67,10 +67,10 @@ export default function Home() {
 
   const heroButtons = useMemo(() => (
     <div className="mt-8 flex flex-wrap items-center gap-4">
-      <Link href="/register" className="btn-primary">
+      <Link href="/register" className="btn-primary text-base">
         Create free account
       </Link>
-      <Link href="/login" className="btn-secondary">
+      <Link href="/login" className="btn-secondary text-base">
         Sign in
       </Link>
     </div>
@@ -81,7 +81,7 @@ export default function Home() {
   if (!loggedIn) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-12 py-12">
-        <section className="relative overflow-hidden rounded-[2.5rem] border border-white/40 bg-white/80 px-8 py-14 text-center shadow-[0_40px_120px_-60px_rgba(15,23,42,0.6)] backdrop-blur">
+        <section className="relative overflow-hidden rounded-[2.5rem] border border-slate-200 bg-white px-8 py-14 text-center shadow-[0_40px_120px_-60px_rgba(15,23,42,0.6)] backdrop-blur">
           <div className="mx-auto max-w-3xl space-y-4">
             <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">
               Trusted digital ballots
@@ -98,7 +98,7 @@ export default function Home() {
             {features.map((feature) => (
               <div
                 key={feature.title}
-                className="flex flex-col gap-2 rounded-2xl border border-white/45 bg-white/80 p-6 text-left shadow-sm backdrop-blur-sm"
+                className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm backdrop-blur-sm"
               >
                 <h3 className="text-sm font-semibold tracking-wide text-indigo-600 uppercase">
                   {feature.title}
@@ -114,7 +114,7 @@ export default function Home() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 py-8">
-      <section className="rounded-[2.25rem] border border-white/45 bg-white/85 px-6 py-10 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur md:px-10">
+      <section className="rounded-[2.25rem] border border-slate-200 bg-white px-6 py-10 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur md:px-10">
         <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div className="space-y-3">
             <p className="text-sm uppercase tracking-[0.35em] text-slate-500">
@@ -131,7 +131,7 @@ export default function Home() {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex flex-col gap-1 rounded-2xl border border-slate-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  className="flex flex-col gap-1 rounded-2xl border border-slate-100 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                 >
                   <span className="text-sm font-semibold text-slate-900">{link.title}</span>
                   <span className="text-xs text-slate-500">{link.subtitle}</span>
@@ -139,7 +139,7 @@ export default function Home() {
               ))}
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-100 bg-white/75 p-5 shadow-md md:max-w-xs">
+          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-md md:max-w-xs">
             <h3 className="text-sm font-semibold text-slate-900">Active voting window</h3>
             {loadingActive ? (
               <p className="mt-3 text-sm text-slate-500 animate-pulse">Checking live sessions…</p>
@@ -151,7 +151,7 @@ export default function Home() {
                 <div className="text-slate-500">
                   {new Date(active.startTime).toLocaleString()} — {new Date(active.endTime).toLocaleString()}
                 </div>
-                <Link href="/vote" className="btn-primary w-full justify-center">
+                <Link href="/vote" className="btn-primary w-full justify-center text-base">
                   Go vote now
                 </Link>
               </div>
@@ -160,7 +160,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="grid gap-5 rounded-[2rem] border border-white/45 bg-white/80 p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:grid-cols-3 md:p-10">
+      <section className="grid gap-5 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:grid-cols-3 md:p-10">
         <div className="md:col-span-1 space-y-3">
           <h3 className="text-2xl font-semibold text-slate-900">Why institutions trust us</h3>
           <p className="text-sm text-slate-500">
@@ -182,7 +182,7 @@ export default function Home() {
               detail: "Socket-powered updates and SQL-backed storage make it ready for organisations of any size.",
             },
           ].map((item) => (
-            <li key={item.title} className="rounded-2xl border border-slate-100 bg-white/70 p-4 shadow-sm">
+            <li key={item.title} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
               <h4 className="text-sm font-semibold text-slate-900">{item.title}</h4>
               <p className="mt-1 text-xs text-slate-500">{item.detail}</p>
             </li>
