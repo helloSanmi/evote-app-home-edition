@@ -1,6 +1,8 @@
-import serverless from "serverless-http";
-import app from "../server.js";
+const serverless = require("serverless-http");
+const app = require("../server");
 
-export const handler = serverless(app, {
-  requestId: "x-vercel-id" // optional
-});
+// Wrap Express for Vercel's Node Serverless Function runtime
+module.exports = (req, res) => {
+  const handler = serverless(app);
+  return handler(req, res);
+};
