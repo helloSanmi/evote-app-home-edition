@@ -9,9 +9,6 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const fs = require("fs");
 
-// ---------------------------------------------
-// App setup
-// ---------------------------------------------
 const app = express();
 app.disable("x-powered-by");
 
@@ -35,11 +32,7 @@ app.use(
   cors({
     origin: ORIGINS.includes("*")
       ? true
-      : function (origin, cb) {
-          // allow no-origin (server-to-server, curl, Postman) or listed origins
-          if (!origin || ORIGINS.includes(origin)) return cb(null, true);
-          return cb(new Error("CORS blocked"), false);
-        },
+      : (origin, cb) => (!origin || ORIGINS.includes(origin) ? cb(null, true) : cb(new Error("CORS blocked"), false)),
     credentials: true
   })
 );
@@ -47,43 +40,39 @@ app.use(
 app.use(bodyParser.json({ limit: "2mb" }));
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// ---------------------------------------------
-// Middleware (your existing ones)
-// ---------------------------------------------
+// --- Your middleware
 const { attachUserIfAny } = require("./middleware/auth");
 app.use(attachUserIfAny);
 app.use(require("./middleware/logger")());
 
 // ---------------------------------------------
-// Uploads (safe for Vercel)
+// Uploads: never crash; fallback to /tmp/uploads
 // ---------------------------------------------
-const isServerless =
-  !!process.env.VERCEL ||
-  !!process.env.LAMBDA_TASK_ROOT ||
-  !!process.env.AWS_REGION ||
-  !!process.env.NOW_REGION;
-
-const configuredUploads = process.env.UPLOADS_DIR;
-
-// On serverless: /tmp/uploads (ephemeral). Locally: ./uploads
-const uploadsRoot = configuredUploads
-  ? configuredUploads
-  : isServerless
-  ? path.join("/tmp", "uploads")
-  : path.join(__dirname, "uploads");
-
-// Try to create folders but never crash if read-only
-try {
-  if (!fs.existsSync(uploadsRoot)) fs.mkdirSync(uploadsRoot, { recursive: true });
-  for (const sub of ["avatars", "candidates"]) {
-    const p = path.join(uploadsRoot, sub);
-    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+function safeMkdir(p) {
+  try {
+    fs.mkdirSync(p, { recursive: true });
+    return true;
+  } catch (e) {
+    console.warn(`safeMkdir warn for "${p}": ${e.code || e.message}`);
+    return false;
   }
-} catch (e) {
-  console.warn("Uploads directory not writable; continuing without creating dirs:", e.message);
 }
 
-// Serve static uploads (works even if empty)
+const configuredUploads = process.env.UPLOADS_DIR;
+let uploadsRoot = configuredUploads || path.join(__dirname, "uploads");
+
+// Try local/repo path first; if not writable (Vercel read-only), fallback to /tmp/uploads
+if (!safeMkdir(uploadsRoot)) {
+  uploadsRoot = path.join("/tmp", "uploads");
+  safeMkdir(uploadsRoot);
+}
+
+// Create subdirs (ignore failures)
+for (const sub of ["avatars", "candidates"]) {
+  safeMkdir(path.join(uploadsRoot, sub));
+}
+
+// Serve static uploads (even if empty)
 app.use("/uploads", express.static(uploadsRoot));
 
 // ---------------------------------------------
@@ -103,6 +92,12 @@ app.use("/api/profile", require("./routes/profile"));
 // ---------------------------------------------
 // Socket.IO (local dev only)
 // ---------------------------------------------
+const isServerless =
+  !!process.env.VERCEL ||
+  !!process.env.LAMBDA_TASK_ROOT ||
+  !!process.env.AWS_REGION ||
+  !!process.env.NOW_REGION;
+
 if (!isServerless && process.env.LOCAL_LISTEN === "true") {
   const http = require("http");
   const { Server } = require("socket.io");
@@ -114,16 +109,11 @@ if (!isServerless && process.env.LOCAL_LISTEN === "true") {
 
   const HOST = process.env.HOST || "0.0.0.0";
   const PORT = Number(process.env.PORT || 5050);
-  server.listen(PORT, HOST, () =>
-    console.log(`Local server running on http://${HOST}:${PORT}`)
-  );
+  server.listen(PORT, HOST, () => console.log(`Local server running on http://${HOST}:${PORT}`));
 } else {
-  // No-op shim on Vercel to avoid crashes where code expects io
+  // No-op shim on Vercel
   const noop = () => {};
   app.set("io", { emit: noop, to: () => ({ emit: noop }), on: noop });
 }
 
-// ---------------------------------------------
-// Export for serverless handler
-// ---------------------------------------------
 module.exports = app;
