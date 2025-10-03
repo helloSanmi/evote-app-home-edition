@@ -43,27 +43,31 @@ const { attachUserIfAny } = require("./middleware/auth");
 app.use(attachUserIfAny);
 app.use(require("./middleware/logger")());
 
-// ---------- Uploads (Vercel-safe) ----------
+// ---------------- Uploads (bullet-proof) ----------------
 const isServerless =
   !!process.env.VERCEL ||
   !!process.env.LAMBDA_TASK_ROOT ||
   !!process.env.AWS_REGION ||
   !!process.env.NOW_REGION;
 
-// Prefer explicit env override
-const configuredUploads = process.env.UPLOADS_DIR && process.env.UPLOADS_DIR.trim();
-
-// On serverless: /tmp/uploads (ephemeral). Locally: ./uploads
-let uploadsRoot = configuredUploads
-  ? configuredUploads
-  : isServerless
+// If serverless -> FORCE /tmp/uploads. Else use ./uploads
+let uploadsRoot = isServerless
   ? path.join("/tmp", "uploads")
   : path.join(__dirname, "uploads");
 
-// helper that never throws; also blocks /var/task
+// Allow override
+if (process.env.UPLOADS_DIR && process.env.UPLOADS_DIR.trim()) {
+  uploadsRoot = process.env.UPLOADS_DIR.trim();
+}
+
+// Never write inside the bundled code dir
+if (uploadsRoot.startsWith("/var/task")) {
+  uploadsRoot = path.join("/tmp", "uploads");
+}
+
 function safeMkdir(p) {
   try {
-    if (p.startsWith("/var/task")) return false; // never try to write in bundle
+    if (p.startsWith("/var/task")) return false; // refuse
     fs.mkdirSync(p, { recursive: true });
     return true;
   } catch (e) {
@@ -72,38 +76,32 @@ function safeMkdir(p) {
   }
 }
 
-// ensure base (try chosen, fallback to /tmp)
-if (!safeMkdir(uploadsRoot)) {
-  uploadsRoot = path.join("/tmp", "uploads");
-  safeMkdir(uploadsRoot);
-}
-// ensure subdirs (ignore failures)
-for (const sub of ["avatars", "candidates"]) {
-  safeMkdir(path.join(uploadsRoot, sub));
-}
+// Ensure base + subdirs (ignore failures on serverless)
+safeMkdir(uploadsRoot);
+safeMkdir(path.join(uploadsRoot, "avatars"));
+safeMkdir(path.join(uploadsRoot, "candidates"));
 
-// mount static (works even if empty)
+// Serve static uploads (even if empty)
 app.use("/uploads", express.static(uploadsRoot));
 
-// ---------- Health & debug ----------
+// Health & debug
 app.get("/api", (_req, res) => res.json({ ok: true, service: "voting-backend" }));
 app.get("/api/__debug_uploads", (_req, res) =>
   res.json({
     isServerless,
     uploadsRoot,
-    configuredUploads: configuredUploads || null,
     vercel: !!process.env.VERCEL
   })
 );
 
-// ---------- Routes ----------
+// Routes
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/public", require("./routes/public"));
 app.use("/api/vote", require("./routes/vote"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/profile", require("./routes/profile"));
 
-// ---------- Socket.IO (local only) ----------
+// Socket.IO (local only)
 if (!isServerless && process.env.LOCAL_LISTEN === "true") {
   const http = require("http");
   const { Server } = require("socket.io");
