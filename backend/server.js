@@ -79,6 +79,25 @@ for (const sub of ["avatars", "candidates"]) safeMkdir(path.join(uploadsRoot, su
 // Serve static files from uploads
 app.use("/uploads", express.static(uploadsRoot));
 
+// ------------ Home + favicon (Option A) ------------
+app.get("/", (_req, res) => {
+  res
+    .status(200)
+    .send(
+      `<pre>✅ Voting backend is running.
+
+Useful links:
+- Health:           /api
+- Uploads (static): /uploads
+
+This backend serves APIs only. The frontend is hosted separately.
+</pre>`
+    );
+});
+
+// Silence noisy favicon requests (avoid 404s in logs)
+app.get("/favicon.ico", (_req, res) => res.status(204).end());
+
 // ------------ Health/debug ------------
 app.get("/api", (_req, res) => res.json({ ok: true, service: "voting-backend" }));
 app.get("/api/__debug_uploads", (_req, res) =>
@@ -92,14 +111,14 @@ app.use("/api/vote", require("./routes/vote"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/profile", require("./routes/profile"));
 
-// ------------ HTTP server + Socket.IO (works on Azure & local) ------------
+// ------------ HTTP server + Socket.IO (Azure & local) ------------
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: ORIGINS.includes("*") ? true : ORIGINS, credentials: true }
 });
 app.set("io", io);
 
-// (Optional) Example socket usage:
+// (Optional) example socket hooks
 // io.on("connection", (socket) => {
 //   console.log("socket connected", socket.id);
 //   socket.on("disconnect", () => console.log("socket disconnected", socket.id));
