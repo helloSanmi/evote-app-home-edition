@@ -1,4 +1,3 @@
-// backend/server.js
 require("dotenv").config();
 const express = require("express");
 const compression = require("compression");
@@ -9,123 +8,53 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
-const { Server } = require("socket.io");
 
 const app = express();
 app.disable("x-powered-by");
 
-// ------------ Security & compression ------------
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-    crossOriginEmbedderPolicy: false
-  })
-);
+// Security & compression
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+}));
 app.use(compression());
 app.use(cookieParser());
 
-// ------------ CORS (comma-separated origins or "*") ------------
-const ORIGINS = String(process.env.CORS_ORIGINS || "*")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+// CORS (front on :3000 by default; supports comma-separated origins)
+const ORIGINS = (process.env.CORS_ORIGINS)
+  .split(",").map(s => s.trim());
+app.use(cors({ origin: ORIGINS, credentials: true }));
 
-app.use(
-  cors({
-    origin: ORIGINS.includes("*")
-      ? true
-      : (origin, cb) =>
-          !origin || ORIGINS.includes(origin) ? cb(null, true) : cb(new Error("CORS blocked"), false),
-    credentials: true
-  })
-);
-
-app.use(bodyParser.json({ limit: "5mb" }));
+app.use(bodyParser.json({ limit: "2mb" }));
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// ------------ Your middleware ------------
+// Attach user (non-blocking) + request logger
 const { attachUserIfAny } = require("./middleware/auth");
 app.use(attachUserIfAny);
 app.use(require("./middleware/logger")());
 
-// ------------ Uploads: Azure-friendly persistent path ------------
-/*
-  Azure App Service (Linux) has a persistent writable area under /home
-  Use /home/site/wwwroot/uploads in Azure; use ./uploads locally.
-  You can override via UPLOADS_DIR env var.
-*/
-const isAzure =
-  !!process.env.WEBSITE_INSTANCE_ID ||
-  !!process.env.WEBSITE_SITE_NAME ||
-  (process.env.HOME && process.env.HOME.startsWith("/home"));
-
-let uploadsRoot =
-  (process.env.UPLOADS_DIR && process.env.UPLOADS_DIR.trim()) ||
-  (isAzure ? "/home/site/wwwroot/uploads" : path.join(__dirname, "uploads"));
-
-function safeMkdir(p) {
-  try {
-    fs.mkdirSync(p, { recursive: true });
-    return true;
-  } catch (e) {
-    console.warn(`safeMkdir warn for "${p}": ${e.code || e.message}`);
-    return false;
-  }
-}
-
-safeMkdir(uploadsRoot);
-for (const sub of ["avatars", "candidates"]) safeMkdir(path.join(uploadsRoot, sub));
-
-// Serve static files from uploads
+// Ensure & serve uploads
+const uploadsRoot = path.join(__dirname, "uploads");
+fs.mkdirSync(path.join(uploadsRoot, "avatars"), { recursive: true });
+fs.mkdirSync(path.join(uploadsRoot, "candidates"), { recursive: true });
 app.use("/uploads", express.static(uploadsRoot));
 
-// ------------ Home + favicon (Option A) ------------
-app.get("/", (_req, res) => {
-  res
-    .status(200)
-    .send(
-      `<pre>✅ Voting backend is running.
-
-Useful links:
-- Health:           /api
-- Uploads (static): /uploads
-
-This backend serves APIs only. The frontend is hosted separately.
-</pre>`
-    );
-});
-
-// Silence noisy favicon requests (avoid 404s in logs)
-app.get("/favicon.ico", (_req, res) => res.status(204).end());
-
-// ------------ Health/debug ------------
+// Health
 app.get("/api", (_req, res) => res.json({ ok: true, service: "voting-backend" }));
-app.get("/api/__debug_uploads", (_req, res) =>
-  res.json({ uploadsRoot, isAzure, home: process.env.HOME || null })
-);
 
-// ------------ Routes ------------
+// Routes
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/public", require("./routes/public"));
 app.use("/api/vote", require("./routes/vote"));
 app.use("/api/admin", require("./routes/admin"));
-app.use("/api/profile", require("./routes/profile"));
+app.use("/api/profile", require("./routes/profile"));  // profile endpoints
 
-// ------------ HTTP server + Socket.IO (Azure & local) ------------
+// Socket.IO
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: ORIGINS.includes("*") ? true : ORIGINS, credentials: true }
-});
+const { Server } = require("socket.io");
+const io = new Server(server, { cors: { origin: ORIGINS, credentials: true }});
 app.set("io", io);
 
-// (Optional) example socket hooks
-// io.on("connection", (socket) => {
-//   console.log("socket connected", socket.id);
-//   socket.on("disconnect", () => console.log("socket disconnected", socket.id));
-// });
-
-const PORT = Number(process.env.PORT || 5050); // Azure sets PORT automatically
 const HOST = process.env.HOST || "0.0.0.0";
-server.listen(PORT, HOST, () => {
-  console.log(`Backend listening on http://${HOST}:${PORT}  (uploads: ${uploadsRoot})`);
-});
+const PORT = Number(process.env.PORT || 5050);
+server.listen(PORT, HOST, () => console.log(`Server running on http://${HOST}:${PORT}`));
