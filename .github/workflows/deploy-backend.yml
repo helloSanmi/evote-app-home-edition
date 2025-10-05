@@ -1,5 +1,5 @@
 # .github/workflows/deploy-backend.yml
-name: Deploy Backend to Azure Web App - votebackend
+name: Deploy Backend on VM (self-hosted)
 
 on:
   push:
@@ -14,55 +14,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
+  deploy:
+    # Labels must match the ones you gave your runner (edit if needed)
+    runs-on: [ self-hosted, evote, backend ]
 
     steps:
-      - name: Checkout
+      - name: Checkout (shallow)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Use Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install backend deps (production)
-        working-directory: backend
+      # Sync repo backend → prod dir on this VM
+      - name: Sync backend files to /srv/evote-backend/backend
+        run: |
+          mkdir -p /srv/evote-backend/backend
+          rsync -a --delete backend/ /srv/evote-backend/backend/
+
+      - name: Install prod deps
+        working-directory: /srv/evote-backend/backend
         run: npm ci --omit=dev
 
-      # Optional: run tests if you have them
+      # Optional: run tests
       - name: Run tests (if present)
-        working-directory: backend
+        working-directory: /srv/evote-backend/backend
         run: npm test --if-present
 
-      # Create a ZIP that INCLUDES node_modules
-      - name: Archive backend (with node_modules)
+      # Optional: DB migrations
+      # - name: Run migrations
+      #   working-directory: /srv/evote-backend/backend
+      #   run: npm run migrate --if-present
+
+      - name: Reload PM2 app
         run: |
-          cd backend
-          zip -r ../backend.zip .
-
-      - name: Upload artifact (backend.zip)
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-zip
-          path: backend.zip
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-zip
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: "votebackend"   # <-- your app name
-          slot-name: "Production"
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_8576A084AC6E42298027ACA31933BA9E }}
-          package: backend.zip
+          # ecosystem.config.js should define the app (cwd=/srv/evote-backend/backend)
+          pm2 startOrReload /srv/evote-backend/ecosystem.config.js --only evote-backend \
+          || pm2 restart evote-backend \
+          || pm2 start /srv/evote-backend/backend/server.js --name evote-backend
+          pm2 save
