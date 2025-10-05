@@ -16,7 +16,7 @@ concurrency:
 jobs:
   deploy:
     # Labels must match the ones you gave your runner (edit if needed)
-    runs-on: [ self-hosted, evote, backend ]
+    runs-on: self-hosted
 
     steps:
       - name: Checkout (shallow)
