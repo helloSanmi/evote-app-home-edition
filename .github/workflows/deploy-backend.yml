@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [ self-hosted, evote, backend ]   # or just: self-hosted
+    runs-on: self-hosted  # or just: self-hosted
 
     env:
       # keep npm polite on small VMs
