@@ -1,5 +1,5 @@
 # .github/workflows/deploy-backend.yml
-name: Deploy Backend on VM (self-hosted)
+name: Deploy backend on VM (self-hosted)
 
 on:
   push:
@@ -15,43 +15,55 @@ concurrency:
 
 jobs:
   deploy:
-    # Labels must match the ones you gave your runner (edit if needed)
-    runs-on: self-hosted
+    runs-on: [ self-hosted, evote, backend ]   # or just: self-hosted
+
+    env:
+      # keep npm polite on small VMs
+      npm_config_jobs: "2"
 
     steps:
-      - name: Checkout (shallow)
+      - name: Checkout (fetch 2 commits so we can diff)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Use Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      # Sync repo backend → prod dir on this VM
-      - name: Sync backend files to /srv/evote-backend/backend
+      - name: Sync backend to /srv/evote-backend/backend
         run: |
           mkdir -p /srv/evote-backend/backend
-          rsync -a --delete backend/ /srv/evote-backend/backend/
+          rsync -a --delete --exclude node_modules backend/ /srv/evote-backend/backend/
 
-      - name: Install prod deps
+      # only install if package-lock.json or package.json changed
+      - name: Detect dependency changes
+        id: deps
+        working-directory: backend
+        run: |
+          set -e
+          CHANGED="false"
+          if git diff --quiet HEAD^ HEAD -- package-lock.json package.json; then
+            echo "No dep changes"
+          else
+            CHANGED="true"
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Install prod deps (only if changed)
+        if: steps.deps.outputs.changed == 'true'
         working-directory: /srv/evote-backend/backend
-        run: npm ci --omit=dev
+        run: |
+          # nice/ionice keep the box responsive
+          nice -n 10 ionice -c2 -n7 npm ci --omit=dev --prefer-offline --no-audit --no-fund
 
-      # Optional: run tests
       - name: Run tests (if present)
         working-directory: /srv/evote-backend/backend
         run: npm test --if-present
 
-      # Optional: DB migrations
-      # - name: Run migrations
-      #   working-directory: /srv/evote-backend/backend
-      #   run: npm run migrate --if-present
-
       - name: Reload PM2 app
         run: |
-          # ecosystem.config.js should define the app (cwd=/srv/evote-backend/backend)
           pm2 startOrReload /srv/evote-backend/ecosystem.config.js --only evote-backend \
           || pm2 restart evote-backend \
           || pm2 start /srv/evote-backend/backend/server.js --name evote-backend
