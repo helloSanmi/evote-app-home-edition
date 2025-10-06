@@ -23,6 +23,10 @@ export default function Login() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!identifier.trim() || !password.trim()) {
+      notifyError("Enter your username or email and password to continue.");
+      return;
+    }
     setBusy(true);
     try {
       const data = await apiPost("/api/auth/login", { identifier, password });
@@ -33,9 +37,11 @@ export default function Login() {
       localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
       window.dispatchEvent(new Event("storage"));
       notifySuccess("Signed in successfully");
-      window.location.replace(data.isAdmin ? "/admin" : "/");
+      setTimeout(() => {
+        router.replace(data.isAdmin ? "/admin" : "/");
+      }, 400);
     } catch (e2) {
-      notifyError(e2.message || "Invalid credentials");
+      notifyError(e2.message || "Unable to sign you in. Please try again.");
     } finally {
       setBusy(false);
     }

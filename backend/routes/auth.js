@@ -29,11 +29,17 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; // username OR email
-    if (!identifier || !password) return res.status(400).json({ error: "MISSING_FIELDS" });
+    if (!identifier || !password) {
+      return res.status(400).json({ error: "MISSING_FIELDS", message: "Please provide your username or email and password." });
+    }
     const [[u]] = await q(`SELECT TOP 1 * FROM Users WHERE username=? OR email=?`, [identifier, identifier]);
-    if (!u) return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+    if (!u) {
+      return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Incorrect username or password." });
+    }
     const ok = await bcrypt.compare(password, u.password || "");
-    if (!ok) return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+    if (!ok) {
+      return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Incorrect username or password." });
+    }
     const token = sign(u);
     const isAdmin = (() => {
       const uName = (u.username || "").toLowerCase();

@@ -34,6 +34,9 @@ export default function AdminPage() {
   const [unpublished, setUnpublished] = useState([]);
   const [unpubLoading, setUnpubLoading] = useState(false);
 
+  const [users, setUsers] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+
   const sessionsRef = useRef([]);
   const statsRef = useRef({ active: 0, upcoming: 0, awaiting: 0 });
   const [sessions, setSessions] = useState([]);
@@ -70,6 +73,7 @@ export default function AdminPage() {
     { id: "sessions", label: "Sessions" },
     { id: "live", label: "Live" },
     { id: "archive", label: "Archive" },
+    { id: "users", label: "Users" },
     { id: "logs", label: "Request Logs" },
   ], []);
 
@@ -82,6 +86,7 @@ export default function AdminPage() {
   useEffect(() => {
     loadUnpublished();
     loadSessions();
+    loadUsers();
 
     const socket = getSocket();
     socketRef.current = socket;
@@ -159,6 +164,19 @@ export default function AdminPage() {
       notifyError(e.message || "Failed to load unpublished candidates");
     } finally {
       setUnpubLoading(false);
+    }
+  }
+
+  async function loadUsers() {
+    setUsersLoading(true);
+    try {
+      const data = await apiGet("/api/admin/users");
+      setUsers(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setUsers([]);
+      notifyError(e.message || "Failed to load users");
+    } finally {
+      setUsersLoading(false);
     }
   }
 
@@ -351,6 +369,36 @@ export default function AdminPage() {
     }
   }
 
+  async function disableUser(user) {
+    try {
+      await apiPost(`/api/admin/users/${user.id}/disable`, {});
+      await loadUsers();
+      notifySuccess(`${user.fullName || user.username} disabled`);
+    } catch (err) {
+      notifyError(err.message || "Failed to disable user");
+    }
+  }
+
+  async function enableUser(user) {
+    try {
+      await apiPost(`/api/admin/users/${user.id}/enable`, {});
+      await loadUsers();
+      notifySuccess(`${user.fullName || user.username} re-enabled`);
+    } catch (err) {
+      notifyError(err.message || "Failed to enable user");
+    }
+  }
+
+  async function deleteUser(user) {
+    try {
+      await apiDelete(`/api/admin/users/${user.id}`);
+      await loadUsers();
+      notifySuccess(`${user.fullName || user.username} deleted`);
+    } catch (err) {
+      notifyError(err.message || "Failed to delete user");
+    }
+  }
+
   async function viewPast(period) {
     setSelPast(period);
     setPastCands([]);
@@ -390,7 +438,48 @@ export default function AdminPage() {
         tone: "danger",
       };
     }
+    if (pendingAction.type === "user-disable") {
+      return {
+        title: "Disable user",
+        message: `Temporarily disable ${pendingAction.user.fullName || pendingAction.user.username}?`,
+        tone: "indigo",
+      };
+    }
+    if (pendingAction.type === "user-enable") {
+      return {
+        title: "Enable user",
+        message: `Re-enable ${pendingAction.user.fullName || pendingAction.user.username}?`,
+        tone: "indigo",
+      };
+    }
+    if (pendingAction.type === "user-delete") {
+      return {
+        title: "Delete user",
+        message: `This will permanently delete ${pendingAction.user.fullName || pendingAction.user.username} and free the user ID. Continue?`,
+        tone: "danger",
+      };
+    }
     return { title: "Confirm", message: "" };
+  }, [pendingAction]);
+
+  const confirmButtonLabel = useMemo(() => {
+    if (!pendingAction) return "Confirm";
+    switch (pendingAction.type) {
+      case "delete":
+        return "Delete";
+      case "end":
+        return "End session";
+      case "publish":
+        return "Publish";
+      case "user-disable":
+        return "Disable";
+      case "user-enable":
+        return "Enable";
+      case "user-delete":
+        return "Delete";
+      default:
+        return "Confirm";
+    }
   }, [pendingAction]);
 
   const handleConfirmAction = async () => {
@@ -399,6 +488,9 @@ export default function AdminPage() {
       if (pendingAction.type === "publish") await publishResults(pendingAction.period);
       if (pendingAction.type === "end") await endVotingEarly(pendingAction.period);
       if (pendingAction.type === "delete") await deleteSession(pendingAction.period.id);
+      if (pendingAction.type === "user-disable") await disableUser(pendingAction.user);
+      if (pendingAction.type === "user-enable") await enableUser(pendingAction.user);
+      if (pendingAction.type === "user-delete") await deleteUser(pendingAction.user);
     } finally {
       setPendingAction(null);
     }
@@ -406,6 +498,20 @@ export default function AdminPage() {
 
   const candidateState = states.find((s) => s.label === cState);
   const candidateLgas = candidateState?.lgas || [];
+  const formatDateValue = (value, withTime = false) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return withTime ? date.toLocaleString() : date.toLocaleDateString();
+  };
+  const isUserDisabled = (user) => String(user?.eligibilityStatus ?? "").trim().toLowerCase() === "disabled";
+  const statusBadgeTone = (status) => {
+    const value = String(status || "").trim().toLowerCase();
+    if (value === "disabled") return "bg-rose-50 text-rose-600";
+    if (value === "active") return "bg-emerald-50 text-emerald-600";
+    return "bg-amber-50 text-amber-600";
+  };
+
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6">
@@ -820,13 +926,106 @@ export default function AdminPage() {
       )}
 
 
+      {tab === "users" && (
+        <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-slate-900">Registered voters</h2>
+              <p className="text-sm text-slate-500">Review sign-ups, manage eligibility, or remove accounts entirely.</p>
+            </div>
+            <button type="button" onClick={loadUsers} className="btn-secondary px-4 py-2 text-xs">
+              Refresh
+            </button>
+          </div>
+
+          <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-100">
+            {usersLoading ? (
+              <div className="p-6 text-sm text-slate-500 animate-pulse">Loading users…</div>
+            ) : users.length === 0 ? (
+              <div className="p-6 text-sm text-slate-500">No registered users yet.</div>
+            ) : (
+              <table className="min-w-full divide-y divide-slate-100 text-sm">
+                <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-3 text-left">Name</th>
+                    <th className="px-3 py-3 text-left">Contact</th>
+                    <th className="px-3 py-3 text-left">Location</th>
+                    <th className="px-3 py-3 text-left">Birth date</th>
+                    <th className="px-3 py-3 text-left">Status</th>
+                    <th className="px-3 py-3 text-left">Registered</th>
+                    <th className="px-3 py-3 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {users.map((user) => {
+                    const rawStatus = String(user?.eligibilityStatus ?? "").trim();
+                    const statusKey = rawStatus ? rawStatus.toLowerCase() : "pending";
+                    const statusLabel = rawStatus
+                      ? `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).toLowerCase()}`
+                      : "Pending";
+                    const disabled = statusKey === "disabled";
+                    return (
+                      <tr key={user.id} className="align-top">
+                        <td className="px-3 py-4">
+                          <div className="text-sm font-semibold text-slate-900">{user.fullName || user.username || "—"}</div>
+                          <div className="text-xs text-slate-500">ID #{user.id}{user.username ? ` • ${user.username}` : ""}</div>
+                          {user.isAdmin && <div className="mt-1 inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-indigo-600">Admin</div>}
+                        </td>
+                        <td className="px-3 py-4 text-xs text-slate-600">
+                          <div className="font-medium text-slate-700">{user.email || "—"}</div>
+                          {user.phone && <div className="text-slate-500">{user.phone}</div>}
+                        </td>
+                        <td className="px-3 py-4 text-xs text-slate-600">
+                          <div>{user.state || "—"}</div>
+                          <div className="text-slate-500">{user.residenceLGA || "—"}</div>
+                          {user.nationality && <div className="mt-1 text-[11px] uppercase tracking-wide text-slate-400">{user.nationality}</div>}
+                        </td>
+                        <td className="px-3 py-4 text-xs text-slate-600">{formatDateValue(user.dateOfBirth)}</td>
+                        <td className="px-3 py-4">
+                          <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusBadgeTone(statusKey)}`}>
+                            {statusLabel}
+                          </span>
+                        </td>
+                        <td className="px-3 py-4 text-xs text-slate-600">{formatDateValue(user.createdAt, true)}</td>
+                        <td className="px-3 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setPendingAction({ type: disabled ? "user-enable" : "user-disable", user })}
+                              className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                                disabled
+                                  ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                                  : "border-amber-200 text-amber-600 hover:bg-amber-50"
+                              }`}
+                            >
+                              {disabled ? "Enable" : "Disable"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingAction({ type: "user-delete", user })}
+                              className="inline-flex items-center rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
+      )}
+
       {tab === "logs" && <LogsPanel />}
 
       <ConfirmDialog
         open={!!pendingAction}
         title={confirmCopy.title}
         message={confirmCopy.message}
-        confirmLabel={pendingAction?.type === "delete" ? "Delete" : pendingAction?.type === "end" ? "End session" : "Publish"}
+        confirmLabel={confirmButtonLabel}
         cancelLabel="Cancel"
         tone={confirmCopy.tone === "danger" ? "danger" : "indigo"}
         onConfirm={handleConfirmAction}

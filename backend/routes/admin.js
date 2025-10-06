@@ -279,7 +279,9 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
     await q(`DELETE FROM Users WHERE id=?`, [uid]);
-    await q(`DECLARE @mx INT = (SELECT ISNULL(MAX(id),0) FROM Users); DBCC CHECKIDENT('Users', RESEED, @mx);`);
+    const [[row]] = await q(`SELECT ISNULL(MAX(id),0) AS maxId FROM Users`);
+    const reseedTo = Number.isFinite(Number(row?.maxId)) ? Number(row.maxId) : 0;
+    await q(`DBCC CHECKIDENT('Users', RESEED, ${reseedTo});`);
     res.json({ success: true });
   } catch (e) {
     console.error("admin/users/delete:", e);
