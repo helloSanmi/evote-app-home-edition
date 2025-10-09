@@ -14,12 +14,20 @@ BEGIN
         phone NVARCHAR(40) NULL,
         nationality NVARCHAR(80) NULL,
         dateOfBirth DATE NULL,
+        role NVARCHAR(30) NOT NULL CONSTRAINT DF_Users_role DEFAULT N'user',
         eligibilityStatus NVARCHAR(20) NOT NULL CONSTRAINT DF_Users_Eligibility DEFAULT N'pending',
         profilePhoto NVARCHAR(500) NULL,
         hasVoted BIT NOT NULL CONSTRAINT DF_Users_hasVoted DEFAULT 0,
         isAdmin BIT NOT NULL CONSTRAINT DF_Users_isAdmin DEFAULT 0,
         createdAt DATETIME2 NOT NULL CONSTRAINT DF_Users_createdAt DEFAULT SYSUTCDATETIME()
     );
+END;
+GO
+
+IF COL_LENGTH('dbo.Users', 'role') IS NULL
+BEGIN
+    ALTER TABLE dbo.Users
+        ADD role NVARCHAR(30) NOT NULL CONSTRAINT DF_Users_role DEFAULT N'user' WITH VALUES;
 END;
 GO
 

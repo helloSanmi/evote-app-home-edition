@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { apiPost } from "../lib/apiBase";
 import { notifyError, notifySuccess } from "../components/Toast";
+import { reidentifySocket } from "../lib/socket";
 
 export default function Login() {
   const router = useRouter();
@@ -14,9 +15,14 @@ export default function Login() {
   useEffect(() => {
     try {
       if (localStorage.getItem("token")) {
-        const admin = localStorage.getItem("isAdmin");
-        const isAdmin = admin === "true" || admin === "1";
-        router.replace(isAdmin ? "/admin" : "/");
+        const role = (localStorage.getItem("role") || "").toLowerCase();
+        if (role === "admin" || role === "super-admin") {
+          router.replace("/admin");
+        } else {
+          const admin = localStorage.getItem("isAdmin");
+          const isAdmin = admin === "true" || admin === "1";
+          router.replace(isAdmin ? "/admin" : "/");
+        }
       }
     } catch {}
   }, [router]);
@@ -34,11 +40,14 @@ export default function Login() {
       localStorage.setItem("userId", data.userId);
       localStorage.setItem("username", data.username);
       localStorage.setItem("profilePhoto", data.profilePhoto || "/avatar.png");
+      localStorage.setItem("role", (data.role || "user").toLowerCase());
       localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
       window.dispatchEvent(new Event("storage"));
       notifySuccess("Signed in successfully");
+      reidentifySocket();
       setTimeout(() => {
-        router.replace(data.isAdmin ? "/admin" : "/");
+        const nextRole = (data.role || "user").toLowerCase();
+        router.replace(nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/");
       }, 400);
     } catch (e2) {
       notifyError(e2.message || "Unable to sign you in. Please try again.");

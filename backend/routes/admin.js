@@ -2,8 +2,9 @@ const express = require("express");
 const router = express.Router();
 const path = require("path");
 const multer = require("multer");
+const bcrypt = require("bcryptjs");
 const { q } = require("../db");
-const { requireAuth, requireAdmin } = require("../middleware/auth");
+const { requireAuth, requireAdmin, requireRole } = require("../middleware/auth");
 
 // ---------- candidate image upload ----------
 const upCand = multer.diskStorage({
@@ -42,6 +43,18 @@ router.post("/candidate", requireAuth, requireAdmin, async (req, res) => {
   } catch (e) {
     console.error("admin/candidate:", e);
     res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.delete("/candidate/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const cid = Number(req.params.id || 0);
+    if (!cid) return res.status(400).json({ error: "MISSING_ID" });
+    await q(`DELETE FROM Candidates WHERE id=? AND (periodId IS NULL OR published=0)`, [cid]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("admin/candidate/delete:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not remove candidate" });
   }
 });
 
@@ -240,12 +253,71 @@ router.delete("/periods/delete", requireAuth, requireAdmin, removePeriod);
 router.post("/periods/delete", requireAuth, requireAdmin, removePeriod);
 
 // users management
+router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res) => {
+  try {
+    const { fullName, username, email, password, phone, state, residenceLGA, role } = req.body || {};
+    if (!fullName || !username || !email || !password) {
+      return res.status(400).json({ error: "MISSING_FIELDS", message: "Full name, username, email, and password are required" });
+    }
+    const normalizedRole = (role || "user").toLowerCase() === "admin" ? "admin" : "user";
+    const hash = await bcrypt.hash(password.trim(), 10);
+    await q(
+      `INSERT INTO Users (fullName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted, role, isAdmin)
+       VALUES (?,?,?,?,?,?,?,?,NULL,'active',0,?,?)`,
+      [
+        fullName,
+        username,
+        email,
+        hash,
+        state || null,
+        residenceLGA || null,
+        phone || null,
+        normalizedRole,
+        normalizedRole === "admin" ? 1 : 0,
+      ]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    const number = e?.number ?? e?.originalError?.info?.number;
+    if (number === 2627 || number === 2601) {
+      return res.status(409).json({ error: "DUPLICATE", message: "Username or email already exists" });
+    }
+    console.error("admin/users/create:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not create user" });
+  }
+});
+
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const [rows] = await q(`SELECT id, fullName, username, email, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, isAdmin, createdAt FROM Users ORDER BY id DESC`);
+    const [rows] = await q(`SELECT id, fullName, username, email, state, residenceLGA, phone, nationality, dateOfBirth, role, eligibilityStatus, isAdmin, createdAt FROM Users ORDER BY id DESC`);
     res.json(rows || []);
   } catch (e) {
     console.error("admin/users:", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/users/export", requireAuth, requireRole(["admin", "super-admin"]), async (_req, res) => {
+  try {
+    const [rows] = await q(`SELECT id, fullName, username, email, phone, state, residenceLGA, role, eligibilityStatus, createdAt FROM Users ORDER BY id DESC`);
+    const header = "id,fullName,username,email,phone,state,residenceLGA,role,eligibilityStatus,createdAt\n";
+    const csv = header + rows.map((r) => [
+      r.id,
+      JSON.stringify(r.fullName || ""),
+      JSON.stringify(r.username || ""),
+      JSON.stringify(r.email || ""),
+      JSON.stringify(r.phone || ""),
+      JSON.stringify(r.state || ""),
+      JSON.stringify(r.residenceLGA || ""),
+      r.role || "",
+      r.eligibilityStatus || "",
+      r.createdAt?.toISOString?.() || r.createdAt,
+    ].join(",")).join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", 'attachment; filename="users.csv"');
+    res.send(csv);
+  } catch (e) {
+    console.error("admin/users/export:", e);
     res.status(500).json({ error: "SERVER" });
   }
 });
@@ -254,6 +326,12 @@ router.post("/users/:id/disable", requireAuth, requireAdmin, async (req, res) =>
   try {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    const actorRole = (req.user?.role || "").toLowerCase();
+    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    if (!target) return res.status(404).json({ error: "NOT_FOUND" });
+    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    }
     await q(`UPDATE Users SET eligibilityStatus='disabled' WHERE id=?`, [uid]);
     res.json({ success: true });
   } catch (e) {
@@ -266,6 +344,12 @@ router.post("/users/:id/enable", requireAuth, requireAdmin, async (req, res) => 
   try {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    const actorRole = (req.user?.role || "").toLowerCase();
+    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    if (!target) return res.status(404).json({ error: "NOT_FOUND" });
+    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    }
     await q(`UPDATE Users SET eligibilityStatus='active' WHERE id=?`, [uid]);
     res.json({ success: true });
   } catch (e) {
@@ -278,6 +362,12 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    const actorRole = (req.user?.role || "").toLowerCase();
+    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    if (!target) return res.status(404).json({ error: "NOT_FOUND" });
+    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    }
     await q(`DELETE FROM Users WHERE id=?`, [uid]);
     const [[row]] = await q(`SELECT ISNULL(MAX(id),0) AS maxId FROM Users`);
     const reseedTo = Number.isFinite(Number(row?.maxId)) ? Number(row.maxId) : 0;
@@ -286,6 +376,53 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   } catch (e) {
     console.error("admin/users/delete:", e);
     res.status(500).json({ error: "SERVER", message: "Could not delete user" });
+  }
+});
+
+router.post("/users/:id/reset-password", requireAuth, requireRole(["super-admin", "admin"]), async (req, res) => {
+  try {
+    const uid = Number(req.params.id || 0);
+    const { password } = req.body || {};
+    if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    if (typeof password !== "string" || password.trim().length < 8) {
+      return res.status(400).json({ error: "INVALID_PASSWORD", message: "Password must be at least 8 characters" });
+    }
+    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    if (!target) return res.status(404).json({ error: "NOT_FOUND" });
+    const actorRole = (req.user?.role || "").toLowerCase();
+    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    }
+    const hash = await bcrypt.hash(password.trim(), 10);
+    await q(`UPDATE Users SET password=? WHERE id=?`, [hash, uid]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("admin/users/reset-password:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not reset password" });
+  }
+});
+
+router.post("/users/:id/role", requireAuth, requireRole(["super-admin"]), async (req, res) => {
+  try {
+    const uid = Number(req.params.id || 0);
+    const { role } = req.body || {};
+    if (!uid) return res.status(400).json({ error: "MISSING_ID" });
+    const normalized = String(role || "").toLowerCase();
+    if (!["admin", "user"].includes(normalized)) {
+      return res.status(400).json({ error: "INVALID_ROLE", message: "Role must be admin or user" });
+    }
+    const [[target]] = await q(`SELECT id, role FROM Users WHERE id=?`, [uid]);
+    if (!target) return res.status(404).json({ error: "NOT_FOUND" });
+    if (target.role?.toLowerCase() === "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Super admin role cannot be changed" });
+    }
+    const isAdminFlag = normalized === "admin" ? 1 : 0;
+    await q(`UPDATE Users SET role=?, isAdmin=? WHERE id=?`, [normalized, isAdminFlag, uid]);
+    req.app.get("io")?.to(`user:${uid}`).emit("roleUpdated", { role: normalized });
+    res.json({ success: true, role: normalized });
+  } catch (e) {
+    console.error("admin/users/role:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not update role" });
   }
 });
 

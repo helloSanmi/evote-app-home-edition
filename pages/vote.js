@@ -1,34 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/router";
 import { jget, jpost } from "../lib/apiBase";
 import { mediaUrl } from "../lib/mediaUrl";
 import { notifyError, notifySuccess } from "../components/Toast";
 import { getSocket } from "../lib/socket";
 import ConfirmDialog from "../components/ConfirmDialog";
 
-function useCountdown(dt) {
-  const target = useMemo(() => (dt ? new Date(dt).getTime() : 0), [dt]);
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const left = Math.max(0, target - now);
-  const s = Math.floor(left / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return left > 0 ? `${h}h ${m}m ${sec}s` : "00h 00m 00s";
-}
 
 export default function Vote() {
+  const router = useRouter();
+  const [accessChecked, setAccessChecked] = useState(false);
+  const [allowed, setAllowed] = useState(false);
   const [sessions, setSessions] = useState(null);
   const [candidatesByPeriod, setCandidatesByPeriod] = useState({});
   const [statusByPeriod, setStatusByPeriod] = useState({});
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(null); // { period, candidate }
   const socketRef = useRef(null);
+  const pollRef = useRef(null);
+  const [selectedSessionId, setSelectedSessionId] = useState(null);
 
-  const loadSessions = async () => {
+  const loadSessions = async ({ suppressErrors } = {}) => {
     try {
       const periods = await jget("/api/public/eligible-sessions");
       setSessions(Array.isArray(periods) ? periods : []);
@@ -48,13 +40,36 @@ export default function Vote() {
 
       setCandidatesByPeriod(updates.reduce((acc, cur) => ({ ...acc, [cur.periodId]: cur.candidates }), {}));
       setStatusByPeriod(updates.reduce((acc, cur) => ({ ...acc, [cur.periodId]: cur.status }), {}));
+      setSelectedSessionId((prev) => {
+        if (prev && updates.some((cur) => cur.periodId === prev)) return prev;
+        return updates.length ? updates[0].periodId : null;
+      });
     } catch (e) {
-      notifyError(e.message || "Failed to load active sessions");
+      if (!suppressErrors) {
+        notifyError(e.message || "Failed to load active sessions");
+      }
       setSessions([]);
     }
   };
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateAccess = () => {
+      const role = (localStorage.getItem("role") || "user").toLowerCase();
+      const privileged = role === "admin" || role === "super-admin";
+      setAllowed(!privileged);
+      setAccessChecked(true);
+      if (privileged) {
+        router.replace("/admin");
+      }
+    };
+    updateAccess();
+    window.addEventListener("storage", updateAccess);
+    return () => window.removeEventListener("storage", updateAccess);
+  }, [router]);
+
+  useEffect(() => {
+    if (!allowed) return;
     let mounted = true;
     (async () => {
       await loadSessions();
@@ -63,7 +78,7 @@ export default function Vote() {
 
     const socket = getSocket();
     socketRef.current = socket;
-    const handleRefresh = () => loadSessions();
+    const handleRefresh = () => loadSessions({ suppressErrors: true });
 
     socket?.on("periodCreated", handleRefresh);
     socket?.on("resultsPublished", handleRefresh);
@@ -75,7 +90,28 @@ export default function Vote() {
       socket?.off("resultsPublished", handleRefresh);
       socket?.off("periodUpdated", handleRefresh);
     };
-  }, []);
+  }, [allowed]);
+
+  useEffect(() => {
+    if (allowed) return;
+    setSessions(null);
+    setCandidatesByPeriod({});
+    setStatusByPeriod({});
+  }, [allowed]);
+
+  useEffect(() => {
+    if (!allowed) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+    pollRef.current = setInterval(() => {
+      loadSessions({ suppressErrors: true });
+    }, 8000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowed]);
 
   const refreshPeriod = async (periodId) => {
     try {
@@ -110,6 +146,22 @@ export default function Vote() {
     }
   };
 
+  const selectedSession = Array.isArray(sessions) ? sessions.find((session) => session.id === selectedSessionId) : null;
+  const selectedCandidates = selectedSession ? candidatesByPeriod[selectedSession.id] || [] : [];
+  const selectedStatus = selectedSession ? statusByPeriod[selectedSession.id] || {} : {};
+  const youVotedId = selectedStatus?.youVoted?.id;
+  const hasVoted = !!selectedStatus?.hasVoted;
+  const now = Date.now();
+  const isSessionActive = (session) => now >= new Date(session.startTime).getTime() && now <= new Date(session.endTime).getTime();
+  const sortedSessions = useMemo(() => {
+    if (!Array.isArray(sessions)) return [];
+    return [...sessions].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+  }, [sessions]);
+
+  if (!accessChecked || (accessChecked && !allowed)) {
+    return null;
+  }
+
   if (sessions === null) {
     return (
       <div className="mx-auto flex min-h-[40vh] w-full max-w-5xl items-center justify-center px-4">
@@ -140,17 +192,114 @@ export default function Vote() {
 
   return (
     <>
-      <div className="mx-auto grid w-full max-w-5xl gap-5 px-4 py-6">
-        {sessions.map((period) => (
-          <SessionCard
-            key={period.id}
-            period={period}
-            candidates={candidatesByPeriod[period.id] || []}
-            status={statusByPeriod[period.id]}
-            busy={busy}
-            onRequestVote={(candidate) => setConfirming({ period, candidate })}
-          />
-        ))}
+      <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-6">
+        {sortedSessions.length === 0 ? (
+          <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center text-sm text-slate-500 shadow-sm">
+            No eligible sessions yet. As soon as one opens, it will appear here.
+          </div>
+        ) : (
+          <div className="space-y-4 md:grid md:grid-cols-[minmax(0,260px)_1fr] md:gap-4 md:space-y-0">
+            <aside className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <h2 className="px-2 text-sm font-semibold text-slate-700">Upcoming ballots</h2>
+              <div className="space-y-1">
+                {sortedSessions.map((session) => {
+                  const active = selectedSessionId === session.id;
+                  const isActiveNow = isSessionActive(session);
+                  const statusLabel = isActiveNow
+                    ? "Live"
+                    : new Date(session.startTime).getTime() > Date.now()
+                      ? "Upcoming"
+                      : "Closed";
+                  const statusTone = isActiveNow
+                    ? "bg-emerald-100 text-emerald-700"
+                    : statusLabel === "Upcoming"
+                      ? "bg-indigo-100 text-indigo-700"
+                      : "bg-slate-200 text-slate-600";
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={() => setSelectedSessionId(session.id)}
+                      className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                        active ? "border-indigo-300 bg-indigo-50 shadow" : "border-slate-200 bg-white hover:border-indigo-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-slate-900">{session.title || `Session #${session.id}`}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusTone}`}>{statusLabel}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">{new Date(session.startTime).toLocaleString()}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              {!selectedSession ? (
+                <div className="text-sm text-slate-500">Select a session from the list to view candidates.</div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-semibold text-slate-900">{selectedSession.title || `Session #${selectedSession.id}`}</h2>
+                      <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} — {new Date(selectedSession.endTime).toLocaleString()}</p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase">Scope: {selectedSession.scope}</span>
+                      {selectedSession.scopeState && <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase">{selectedSession.scopeState}</span>}
+                      {selectedSession.scope === "local" && selectedSession.scopeLGA && (
+                        <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase">{selectedSession.scopeLGA}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+                    {hasVoted ? (
+                      <p className="font-semibold text-emerald-700">Your vote has been recorded. You can still review the candidates below.</p>
+                    ) : (
+                      <p>Select your preferred candidate. You can only vote once.</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {selectedCandidates.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">No candidates published yet.</div>
+                    ) : (
+                      selectedCandidates.map((candidate) => {
+                        const isChoice = youVotedId === candidate.id;
+                        const disabledChoice = busy || hasVoted || !isSessionActive(selectedSession);
+                        return (
+                          <button
+                            key={candidate.id}
+                            type="button"
+                            onClick={() => setConfirming({ period: selectedSession, candidate })}
+                            disabled={disabledChoice}
+                            className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60 ${
+                              isChoice ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-white hover:-translate-y-0.5 hover:shadow-md"
+                            } ${disabledChoice && !isChoice ? "opacity-70" : ""}`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={mediaUrl(candidate.photoUrl || "/placeholder.png")}
+                                alt={candidate.name}
+                                className="h-10 w-10 rounded-full object-cover ring-1 ring-slate-200/70"
+                              />
+                              <div>
+                                <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
+                                <div className="text-xs text-slate-500">{candidate.state}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
+                              </div>
+                            </div>
+                            <div className="text-xs font-semibold text-slate-500">
+                              {isChoice ? "Your selection" : isSessionActive(selectedSession) ? "Tap to vote" : hasVoted ? "Vote recorded" : "Voting closed"}
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
       </div>
 
       <ConfirmDialog
@@ -166,81 +315,3 @@ export default function Vote() {
   );
 }
 
-function SessionCard({ period, candidates, status, busy, onRequestVote }) {
-  const startCountdown = useCountdown(period.startTime);
-  const endCountdown = useCountdown(period.endTime);
-  const now = Date.now();
-  const started = now >= new Date(period.startTime).getTime();
-  const ended = now > new Date(period.endTime).getTime();
-  const youVotedId = status?.youVoted?.id;
-  const hasVoted = !!status?.hasVoted;
-
-  return (
-    <div className="overflow-hidden rounded-2xl border border-slate-300 bg-white p-5 shadow-[0_25px_70px_-40px_rgba(15,23,42,0.6)] backdrop-blur">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="text-lg font-bold text-slate-900">{period.title || `Session #${period.id}`}</div>
-          <div className="text-sm text-slate-500">
-            {new Date(period.startTime).toLocaleString()} — {new Date(period.endTime).toLocaleString()}
-          </div>
-          <div className="text-xs text-slate-500">
-            Scope: <span className="font-medium uppercase text-slate-800">{period.scope}</span>
-            {period.scope !== "national" && period.scopeState ? ` • ${period.scopeState}` : ""}
-            {period.scope === "local" && period.scopeLGA ? ` • ${period.scopeLGA}` : ""}
-          </div>
-          {hasVoted && status?.youVoted && (
-            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-600">
-              <span>✅ You voted for <span className="font-semibold">{status.youVoted.name}</span></span>
-            </div>
-          )}
-        </div>
-        <div className="self-start rounded-full bg-indigo-50 px-3 py-1 text-sm font-medium text-indigo-700">
-          {started ? (ended ? "Ended" : `Ends in ${endCountdown}`) : `Starts in ${startCountdown}`}
-        </div>
-      </div>
-
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {candidates.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-white p-4 text-center text-sm text-slate-500">
-            Candidates will appear here once added.
-          </div>
-        ) : (
-          candidates.map((candidate) => {
-            const isChoice = youVotedId === candidate.id;
-            const disabled = busy || !started || ended || hasVoted;
-
-            return (
-              <button
-                key={candidate.id}
-                type="button"
-                onClick={() => onRequestVote(candidate)}
-                disabled={disabled}
-                className={`flex h-full flex-col gap-4 rounded-2xl border p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60 ${
-                  isChoice
-                    ? "border-indigo-400 bg-indigo-50"
-                    : "border-slate-100 bg-white hover:-translate-y-0.5 hover:shadow-md"
-                } ${disabled && !isChoice ? "opacity-60" : ""}`}
-              >
-                <div className="flex items-center gap-3">
-                  <img
-                    src={mediaUrl(candidate.photoUrl)}
-                    alt={candidate.name}
-                    className="h-12 w-12 rounded-full object-cover ring-1 ring-slate-200/70"
-                  />
-                  <div>
-                    <div className="text-base font-semibold text-slate-900">{candidate.name}</div>
-                    <div className="text-xs text-slate-500">{candidate.state} • {candidate.lga}</div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>{candidate.votes} votes</span>
-                  <span>{isChoice ? "Your selection" : !started ? "Voting locked" : ended ? "Session ended" : "Tap to vote"}</span>
-                </div>
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}

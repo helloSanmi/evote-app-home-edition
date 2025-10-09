@@ -2,9 +2,24 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { q } = require("../db");
+const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
-const sign = (u) => jwt.sign({ id: u.id, username: u.username, email: u.email }, process.env.JWT_SECRET, { expiresIn: "7d" });
+const sign = (u) => jwt.sign({ id: u.id, username: u.username, email: u.email, role: u.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
+const normalizeRole = (user) => {
+  const envUsernames = new Set((process.env.ADMIN_USERNAMES || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const envEmails = new Set((process.env.ADMIN_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const username = (user.username || "").toLowerCase();
+  const email = (user.email || "").toLowerCase();
+
+  let role = (user.role || "").toLowerCase();
+  if (!role) role = user.isAdmin ? "admin" : "user";
+  if (role !== "super-admin" && user.isAdmin && role !== "admin") role = "admin";
+  if (envUsernames.has(username) || envEmails.has(email)) role = "super-admin";
+  if (!["super-admin", "admin", "user"].includes(role)) role = "user";
+  return role;
+};
 
 // Register
 router.post("/register", async (req, res) => {
@@ -13,8 +28,8 @@ router.post("/register", async (req, res) => {
     if (!fullName || !username || !email || !password) return res.status(400).json({ error: "MISSING_FIELDS" });
     const hash = await bcrypt.hash(password, 10);
     await q(
-      `INSERT INTO Users (fullName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted)
-       VALUES (?,?,?,?,?,?,?,?,?,'pending',0)`,
+      `INSERT INTO Users (fullName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, role, eligibilityStatus, hasVoted)
+       VALUES (?,?,?,?,?,?,?,?,?,'user','pending',0)`,
       [fullName, username, email, hash, state || null, residenceLGA || null, phone || null, nationality || null, dateOfBirth || null]
     );
     res.json({ success: true });
@@ -40,23 +55,51 @@ router.post("/login", async (req, res) => {
     if (!ok) {
       return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Incorrect username or password." });
     }
-    const token = sign(u);
-    const isAdmin = (() => {
-      const uName = (u.username || "").toLowerCase();
-      const eMail = (u.email || "").toLowerCase();
-      const uSet = new Set((process.env.ADMIN_USERNAMES || "").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean));
-      const eSet = new Set((process.env.ADMIN_EMAILS    || "").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean));
-      return uSet.has(uName) || (eMail && eSet.has(eMail)) || !!u.isAdmin;
-    })();
+    const role = normalizeRole(u);
+    if (u.role !== role) {
+      try {
+        await q(`UPDATE Users SET role=? WHERE id=?`, [role, u.id]);
+      } catch {}
+    }
+    const userForToken = { ...u, role };
+    const token = sign(userForToken);
+    const isAdmin = role === "admin" || role === "super-admin";
     res.json({
       token,
       userId: u.id,
       username: u.username,
+      role,
       isAdmin,
       profilePhoto: u.profilePhoto || null,
     });
   } catch {
     res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.post("/refresh-role", requireAuth, async (req, res) => {
+  try {
+    const [[u]] = await q(`SELECT TOP 1 * FROM Users WHERE id=?`, [req.user.id]);
+    if (!u) return res.status(404).json({ error: "NOT_FOUND" });
+    const role = normalizeRole(u);
+    if (u.role !== role) {
+      await q(`UPDATE Users SET role=?, isAdmin=? WHERE id=?`, [role, role === "admin" || role === "super-admin" ? 1 : 0, u.id]);
+      u.role = role;
+      u.isAdmin = role === "admin" || role === "super-admin" ? 1 : 0;
+    }
+    const token = sign({ ...u, role });
+    const isAdmin = role === "admin" || role === "super-admin";
+    res.json({
+      token,
+      role,
+      isAdmin,
+      userId: u.id,
+      username: u.username,
+      profilePhoto: u.profilePhoto || null,
+    });
+  } catch (err) {
+    console.error("auth/refresh-role:", err);
+    res.status(500).json({ error: "SERVER", message: "Could not refresh role" });
   }
 });
 

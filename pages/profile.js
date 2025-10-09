@@ -109,7 +109,7 @@ export default function Profile() {
         <label className="relative cursor-pointer group">
           <img
             src={mediaUrl(user.profilePhoto)}
-            className="w-24 h-24 rounded-full object-cover border"
+            className="w-24 h-24 rounded-full object-cover border border-white ring-2 ring-slate-200/70"
             alt={user.fullName}
             title="Click to change"
           />

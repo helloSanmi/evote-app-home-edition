@@ -1,6 +1,7 @@
 // frontend/pages/index.js
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/router";
 import { jget } from "../lib/apiBase";
 import { notifyError } from "../components/Toast";
 
@@ -27,9 +28,11 @@ const quickLinks = [
 ];
 
 export default function Home() {
+  const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [username, setUsername] = useState("");
+  const [role, setRole] = useState("user");
   const [active, setActive] = useState(null);
   const [loadingActive, setLoadingActive] = useState(true);
 
@@ -39,6 +42,8 @@ export default function Home() {
       const token = localStorage.getItem("token");
       setLoggedIn(!!token);
       setUsername(localStorage.getItem("username") || "");
+      const storedRole = (localStorage.getItem("role") || "user").toLowerCase();
+      setRole(storedRole);
     };
     sync();
     window.addEventListener("storage", sync);
@@ -46,7 +51,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!loggedIn) {
+    if (!mounted) return;
+    if (role === "admin" || role === "super-admin") {
+      router.replace("/admin");
+    }
+  }, [role, router, mounted]);
+
+  useEffect(() => {
+    if (!loggedIn || role === "admin" || role === "super-admin") {
       setActive(null);
       setLoadingActive(false);
       return;
@@ -63,7 +75,7 @@ export default function Home() {
         setLoadingActive(false);
       }
     })();
-  }, [loggedIn]);
+  }, [loggedIn, role]);
 
   const heroButtons = useMemo(() => (
     <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -78,10 +90,14 @@ export default function Home() {
 
   if (!mounted) return null;
 
+  if (role === "admin" || role === "super-admin") {
+    return null;
+  }
+
   if (!loggedIn) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-12 py-12">
-        <section className="relative overflow-hidden rounded-[2.5rem] border border-slate-200 bg-white px-8 py-14 text-center shadow-[0_40px_120px_-60px_rgba(15,23,42,0.6)] backdrop-blur">
+        <section className="relative overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50 px-8 py-14 text-center shadow-[0_25px_70px_-40px_rgba(15,23,42,0.4)]">
           <div className="mx-auto max-w-3xl space-y-4">
             <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">
               Trusted digital ballots
@@ -98,7 +114,7 @@ export default function Home() {
             {features.map((feature) => (
               <div
                 key={feature.title}
-                className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm backdrop-blur-sm"
+                className="flex flex-col gap-2 rounded-2xl border border-slate-200/80 bg-white p-6 text-left shadow-sm"
               >
                 <h3 className="text-sm font-semibold tracking-wide text-indigo-600 uppercase">
                   {feature.title}
@@ -114,7 +130,7 @@ export default function Home() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 py-8">
-      <section className="rounded-[2.25rem] border border-slate-200 bg-white px-6 py-10 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur md:px-10">
+      <section className="rounded-3xl border border-slate-200 bg-white/95 px-6 py-10 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur-sm md:px-10">
         <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div className="space-y-3">
             <p className="text-sm uppercase tracking-[0.35em] text-slate-500">
@@ -131,7 +147,7 @@ export default function Home() {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex flex-col gap-1 rounded-2xl border border-slate-100 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  className="flex flex-col gap-1 rounded-2xl border border-slate-200/70 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                 >
                   <span className="text-sm font-semibold text-slate-900">{link.title}</span>
                   <span className="text-xs text-slate-500">{link.subtitle}</span>
@@ -139,7 +155,7 @@ export default function Home() {
               ))}
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-md md:max-w-xs">
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md md:max-w-xs">
             <h3 className="text-sm font-semibold text-slate-900">Active voting window</h3>
             {loadingActive ? (
               <p className="mt-3 text-sm text-slate-500 animate-pulse">Checking live sessions…</p>
@@ -160,7 +176,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="grid gap-5 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:grid-cols-3 md:p-10">
+      <section className="grid gap-5 rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_25px_70px_-50px_rgba(15,23,42,0.45)] md:grid-cols-3 md:p-10">
         <div className="md:col-span-1 space-y-3">
           <h3 className="text-2xl font-semibold text-slate-900">Why institutions trust us</h3>
           <p className="text-sm text-slate-500">
