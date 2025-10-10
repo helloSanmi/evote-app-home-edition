@@ -12,6 +12,21 @@ function getStoredRole() {
   return (localStorage.getItem("role") || ROLE_USER).toLowerCase();
 }
 
+function getStoredToken() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("token") || "";
+}
+
+function getStoredGuestName() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("chatGuestName") || "";
+}
+
+function getStoredGuestToken() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("chatGuestToken") || "";
+}
+
 const userPlaceholders = [
   "How do I change my password?",
   "I can't find my session",
@@ -42,10 +57,16 @@ export default function AssistantChat() {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [assigning, setAssigning] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(getStoredToken()));
+  const [guestName, setGuestName] = useState(getStoredGuestName());
+  const [guestToken, setGuestToken] = useState(getStoredGuestToken());
+  const [guestNameInput, setGuestNameInput] = useState(getStoredGuestName());
+  const [guestError, setGuestError] = useState("");
   const inputRef = useRef(null);
   const listRef = useRef(null);
 
   const isAdmin = role === ROLE_ADMIN || role === ROLE_SUPER;
+  const isGuestMode = !isAuthenticated && !isAdmin;
 
   const selectedSession = useMemo(() => {
     if (!isAdmin) return session;
@@ -54,7 +75,12 @@ export default function AssistantChat() {
   }, [isAdmin, session, sessions, activeSessionId]);
 
   useEffect(() => {
-    const handleStorage = () => setRole(getStoredRole());
+    const handleStorage = () => {
+      setRole(getStoredRole());
+      setIsAuthenticated(Boolean(getStoredToken()));
+      setGuestName(getStoredGuestName());
+      setGuestToken(getStoredGuestToken());
+    };
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
@@ -63,11 +89,27 @@ export default function AssistantChat() {
     if (!open) return;
     if (isAdmin) {
       loadAdminSessions();
-    } else {
+      return;
+    }
+    if (isAuthenticated) {
       loadUserConversation({ notify: true });
+      return;
+    }
+    if (isGuestMode && guestToken) {
+      loadGuestConversation({ notify: true });
+      return;
+    }
+    if (isGuestMode && !guestToken) {
+      setSession(null);
+      setMessages([]);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isAdmin]);
+  }, [open, isAdmin, isAuthenticated, isGuestMode, guestToken]);
+
+  useEffect(() => {
+    if (!guestName) return;
+    setGuestNameInput((prev) => (prev ? prev : guestName));
+  }, [guestName]);
 
   useEffect(() => {
     if (!open) return;
@@ -138,7 +180,42 @@ export default function AssistantChat() {
     return "You";
   };
 
+  const persistGuestDetails = (name, token) => {
+    const trimmedName = (name || "").trim();
+    setGuestName(trimmedName);
+    setGuestNameInput(trimmedName);
+    if (typeof window !== "undefined") {
+      if (trimmedName) {
+        localStorage.setItem("chatGuestName", trimmedName);
+      } else {
+        localStorage.removeItem("chatGuestName");
+      }
+      if (token) {
+        localStorage.setItem("chatGuestToken", token);
+      } else {
+        localStorage.removeItem("chatGuestToken");
+      }
+    }
+    setGuestToken(token || "");
+  };
+
+  const clearGuestToken = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("chatGuestToken");
+    }
+    setGuestToken("");
+  };
+
   async function loadUserConversation({ notify = true, create = false } = {}) {
+    if (isGuestMode) {
+      if (create) {
+        await startGuestConversation();
+        return;
+      }
+      if (!guestToken) return;
+      await loadGuestConversation({ notify });
+      return;
+    }
     setLoading(true);
     try {
       const query = create ? "?create=1" : "";
@@ -148,6 +225,7 @@ export default function AssistantChat() {
       if (notify && data.session?.status === "pending") {
         notifyInfo("Hang tight—an admin will join shortly.");
       }
+      scrollToBottom();
       if (create) {
         setInput("");
       }
@@ -158,8 +236,68 @@ export default function AssistantChat() {
     }
   }
 
+  async function loadGuestConversation({ notify = true } = {}) {
+    if (!guestToken) return;
+    setLoading(true);
+    try {
+      const data = await apiGet(`/api/chat/guest/session?token=${encodeURIComponent(guestToken)}`);
+      setSession(data.session || null);
+      setMessages(Array.isArray(data.messages) ? data.messages : []);
+      if (data.session?.userDisplayName) {
+        persistGuestDetails(data.session.userDisplayName, guestToken);
+      }
+      if (notify && data.session?.status === "pending") {
+        notifyInfo("Hang tight—an admin will join shortly.");
+      }
+    } catch (err) {
+      const message = err.message || "Unable to load chat";
+      if (err.message?.toLowerCase().includes("not found")) {
+        clearGuestToken();
+        setSession(null);
+        setMessages([]);
+      }
+      if (notify) notifyError(message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function startNewConversation() {
-    await loadUserConversation({ notify: true, create: true });
+    if (isGuestMode) {
+      await startGuestConversation();
+    } else {
+      await loadUserConversation({ notify: true, create: true });
+    }
+  }
+
+  async function startGuestConversation() {
+    const fullName = (guestNameInput || "").trim();
+    if (!fullName) {
+      setGuestError("Enter your full name to start chatting.");
+      return;
+    }
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      setGuestError("Please include both your first and last name.");
+      return;
+    }
+    setGuestError("");
+    setLoading(true);
+    try {
+      const data = await apiPost("/api/chat/guest/session", { name: fullName });
+      const displayName = data.session?.userDisplayName || fullName;
+      persistGuestDetails(displayName, data.token);
+      setSession(data.session || null);
+      setMessages(Array.isArray(data.messages) ? data.messages : []);
+      if (data.session?.status === "pending") {
+        notifyInfo("Hang tight—an admin will join shortly.");
+      }
+      scrollToBottom();
+    } catch (err) {
+      notifyError(err.message || "Unable to start the chat");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function closeSelectedConversation() {
@@ -169,6 +307,14 @@ export default function AssistantChat() {
         await apiPost(`/api/chat/sessions/${selectedSession.id}/close`, {});
         await loadAdminSessions();
         notifySuccess("Conversation closed");
+      } else if (isGuestMode) {
+        if (!guestToken) {
+          notifyError("We couldn't find your chat reference. Please start a new conversation.");
+          return;
+        }
+        await apiPost("/api/chat/guest/session/close", { token: guestToken });
+        notifySuccess("Conversation ended");
+        setSession((prev) => (prev ? { ...prev, status: "closed" } : prev));
       } else {
         await apiPost("/api/chat/session/close", {});
         notifySuccess("Conversation ended");
@@ -238,15 +384,23 @@ export default function AssistantChat() {
       notifyInfo("This conversation is closed. Start a new one to send more messages.");
       return;
     }
+    setInput("");
     try {
-      setInput("");
       if (isAdmin) {
         await apiPost(`/api/chat/sessions/${selectedSession.id}/message`, { message: value });
+      } else if (isGuestMode) {
+        if (!guestToken) {
+          setInput(value);
+          notifyError("Please start a chat and share your name before sending messages.");
+          return;
+        }
+        await apiPost("/api/chat/guest/message", { token: guestToken, message: value });
       } else {
         await apiPost("/api/chat/message", { message: value });
       }
       scrollToBottom();
     } catch (err) {
+      setInput(value);
       notifyError(err.message || "Message failed to send");
     }
   };
@@ -262,8 +416,9 @@ export default function AssistantChat() {
     if (!selectedSession) return "";
     if (selectedSession.status === "closed") return "Conversation closed";
     if (selectedSession.status === "bot") return "Assistant is handling this conversation.";
-    if (!selectedSession.assignedAdminName) return "Waiting for an admin";
-    return `Chatting with ${selectedSession.assignedAdminName}`;
+    const adminName = selectedSession.assignedAdminDisplayName || selectedSession.assignedAdminName;
+    if (!adminName) return "Waiting for an admin";
+    return `Chatting with ${adminName}`;
   };
 
   return (
@@ -312,12 +467,12 @@ export default function AssistantChat() {
                         className={`w-full rounded-2xl border px-3 py-2 text-left transition ${active ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-white hover:border-indigo-200"}`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-semibold text-slate-900">{item.userName || `User #${item.userId}`}</span>
+                          <span className="text-sm font-semibold text-slate-900">{item.userDisplayName || item.userName || `User #${item.userId}`}</span>
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone.tone}`}>{tone.label}</span>
                         </div>
                         <p className="mt-1 text-[11px] text-slate-500">Last update {new Date(item.lastMessageAt).toLocaleString()}</p>
-                        {item.assignedAdminName && (
-                          <p className="text-[11px] text-slate-500">Assigned to {item.assignedAdminName}</p>
+                        {item.assignedAdminDisplayName && (
+                          <p className="text-[11px] text-slate-500">Assigned to {item.assignedAdminDisplayName}</p>
                         )}
                       </button>
                     );
@@ -342,8 +497,47 @@ export default function AssistantChat() {
                       )}
                     </div>
                     <p className="mt-1 text-slate-500">
-                      {session.assignedAdminName ? `Chatting with ${session.assignedAdminName}` : "No human joined yet."}
+                      {session.assignedAdminDisplayName || session.assignedAdminName
+                        ? `Chatting with ${session.assignedAdminDisplayName || session.assignedAdminName}`
+                        : "No human joined yet."}
                     </p>
+                    {isGuestMode && session.userDisplayName && (
+                      <p className="text-[10px] text-slate-500">You're chatting as {session.userDisplayName}</p>
+                    )}
+                  </div>
+                ) : isGuestMode ? (
+                  <div className="space-y-2 rounded-lg border border-slate-200 bg-white px-3 py-3 text-left">
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Enter your full name</p>
+                      <input
+                        className="w-full rounded-full border border-slate-200 px-3 py-2 text-[11px] focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                        value={guestNameInput}
+                        onChange={(e) => {
+                          setGuestNameInput(e.target.value);
+                          if (guestError) setGuestError("");
+                        }}
+                        placeholder="e.g. Jane Doe"
+                        autoComplete="name"
+                      />
+                    </div>
+                    {guestError && <p className="text-[10px] text-rose-600">{guestError}</p>}
+                    <button
+                      type="button"
+                      onClick={startGuestConversation}
+                      disabled={loading}
+                      className="w-full rounded-full bg-indigo-600 px-3 py-2 text-[10px] font-semibold text-white shadow transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {loading ? "Starting…" : "Start chat"}
+                    </button>
+                    {guestToken && (
+                      <button
+                        type="button"
+                        onClick={() => loadGuestConversation({ notify: true })}
+                        className="w-full rounded-full border border-slate-200 px-3 py-2 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:text-indigo-600"
+                      >
+                        Resume recent conversation
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <button

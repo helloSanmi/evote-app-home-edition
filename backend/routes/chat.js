@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const { q } = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
@@ -28,14 +29,20 @@ async function getOrCreateSessionForUser(user) {
   return fresh;
 }
 
-function rowToSession(row) {
-  return {
+function rowToSession(row, { guestToken } = {}) {
+  const rawUserName = row.userName || "";
+  const rawAdminName = row.assignedAdminName || "";
+  const session = {
     ...row,
-    userName: firstName(row.userName || ""),
-    assignedAdminName: firstName(row.assignedAdminName || ""),
+    userName: firstName(rawUserName),
+    userDisplayName: rawUserName,
+    assignedAdminName: firstName(rawAdminName),
+    assignedAdminDisplayName: rawAdminName,
     createdAt: row.createdAt?.toISOString?.() || row.createdAt,
     lastMessageAt: row.lastMessageAt?.toISOString?.() || row.lastMessageAt,
   };
+  if (guestToken !== undefined) session.guestToken = guestToken;
+  return session;
 }
 
 function rowToMessage(row) {
@@ -114,6 +121,109 @@ function shouldEscalateToHuman(message) {
   return escalationRegex.test(message);
 }
 
+function generateGuestToken() {
+  return crypto.randomBytes(18).toString("hex");
+}
+
+async function findGuestSessionByToken(token) {
+  if (!token) return null;
+  const [[row]] = await q(
+    `SELECT TOP 1 s.*, g.token
+     FROM ChatGuestToken g
+     JOIN ChatSession s ON s.id = g.sessionId
+     WHERE g.token=?
+     ORDER BY s.createdAt DESC`,
+    [token]
+  );
+  if (!row) return null;
+  const { token: storedToken, ...session } = row;
+  return { session, token: storedToken };
+}
+
+async function createGuestSession(name) {
+  const token = generateGuestToken();
+  const cleaned = (name || "").trim();
+  const [[session]] = await q(
+    `INSERT INTO ChatSession (userId, userName, status)
+     OUTPUT INSERTED.*
+     VALUES (NULL, ?, 'pending')`,
+    [cleaned]
+  );
+  await q(`INSERT INTO ChatGuestToken (sessionId, token) VALUES (?, ?)`, [session.id, token]);
+  return { session, token };
+}
+
+async function recordInboundMessage({ session, body, senderType, senderId, senderName, io }) {
+  const trimmed = body.trim();
+  await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
+    session.id,
+    senderType,
+    senderId || null,
+    senderName,
+    trimmed,
+  ]);
+  const wantsHuman = shouldEscalateToHuman(trimmed);
+  const hasAdmin = Boolean(session.assignedAdminId);
+  const botReply = !hasAdmin && !wantsHuman ? getBotReply(trimmed) : null;
+  const [[lastBot]] = await q(`SELECT TOP 1 senderType, body FROM ChatMessage WHERE sessionId=? AND senderType='bot' ORDER BY id DESC`, [session.id]);
+  const alreadySentDefault = lastBot?.body === assistantDefaultReply;
+  const shouldEscalate = wantsHuman;
+  const nextStatus = hasAdmin ? "active" : shouldEscalate ? "pending" : "bot";
+  await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME(), status=? WHERE id=?`, [nextStatus, session.id]);
+
+  const [[created]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+  const payload = { ...rowToMessage(created), sessionId: session.id };
+  io?.to(`chat:${session.id}`).emit("chat:message", payload);
+  io?.emit("chat:sessions:update");
+  io?.to(`chat:${session.id}`).emit("chat:session:update", { id: session.id, status: nextStatus });
+
+  if (botReply) {
+    await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
+      session.id,
+      "bot",
+      null,
+      "Assistant",
+      botReply,
+    ]);
+    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
+    const [[botMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+    const botPayload = { ...rowToMessage(botMessage), sessionId: session.id };
+    io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
+    return { payload, nextStatus };
+  }
+
+  if (!hasAdmin && !wantsHuman && !alreadySentDefault) {
+    await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
+      session.id,
+      "bot",
+      null,
+      "Assistant",
+      assistantDefaultReply,
+    ]);
+    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
+    const [[defaultMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+    const botPayload = { ...rowToMessage(defaultMessage), sessionId: session.id };
+    io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
+    return { payload, nextStatus };
+  }
+
+  if (!hasAdmin && shouldEscalate) {
+    await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
+      session.id,
+      "bot",
+      null,
+      "Assistant",
+      fallbackEscalationReply,
+    ]);
+    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
+    const [[escalationMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+    const botPayload = { ...rowToMessage(escalationMessage), sessionId: session.id };
+    io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
+  }
+
+  return { payload, nextStatus };
+}
+
 router.get("/session", requireAuth, async (req, res) => {
   try {
     const raw = (req.query?.create ?? "").toString().toLowerCase();
@@ -136,73 +246,105 @@ router.post("/message", requireAuth, async (req, res) => {
     const { message } = req.body || {};
     if (!message || !message.trim()) return res.status(400).json({ error: "MISSING_MESSAGE" });
     const session = await getOrCreateSessionForUser(req.user);
-    const body = message.trim();
     const senderName = firstName(req.user.username || req.user.email || `User #${req.user.id}`) || `User #${req.user.id}`;
-    await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
-      session.id,
-      "user",
-      req.user.id,
-      senderName,
-      body,
-    ]);
-    const wantsHuman = shouldEscalateToHuman(body);
-    const hasAdmin = Boolean(session.assignedAdminId);
-    const botReply = !hasAdmin && !wantsHuman ? getBotReply(body) : null;
-    const [[lastBot]] = await q(`SELECT TOP 1 senderType, body FROM ChatMessage WHERE sessionId=? AND senderType='bot' ORDER BY id DESC`, [session.id]);
-    const alreadySentDefault = lastBot?.body === assistantDefaultReply;
-    const shouldEscalate = wantsHuman;
-    const nextStatus = hasAdmin ? "active" : shouldEscalate ? "pending" : "bot";
-    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME(), status=? WHERE id=?`, [nextStatus, session.id]);
-
-    const [[created]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
-    const payload = { ...rowToMessage(created), sessionId: session.id };
     const io = req.app.get("io");
-    io?.to(`chat:${session.id}`).emit("chat:message", payload);
-    io?.emit("chat:sessions:update");
-
-    io?.to(`chat:${session.id}`).emit("chat:session:update", { id: session.id, status: nextStatus });
-
-    let botPayload = null;
-    if (botReply) {
-      await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
-        session.id,
-        "bot",
-        null,
-        "Assistant",
-        botReply,
-      ]);
-      await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
-      const [[botMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
-      botPayload = { ...rowToMessage(botMessage), sessionId: session.id };
-      io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
-    } else if (!hasAdmin && !wantsHuman && !alreadySentDefault) {
-      await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
-        session.id,
-        "bot",
-        null,
-        "Assistant",
-        assistantDefaultReply,
-      ]);
-      await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
-      const [[defaultMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
-      botPayload = { ...rowToMessage(defaultMessage), sessionId: session.id };
-      io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
-    } else if (!hasAdmin && shouldEscalate) {
-      await q(`INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`, [
-        session.id,
-        "bot",
-        null,
-        "Assistant",
-        fallbackEscalationReply,
-      ]);
-      await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
-      const [[escalationMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
-      botPayload = { ...rowToMessage(escalationMessage), sessionId: session.id };
-      io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
-    }
+    const { payload, nextStatus } = await recordInboundMessage({
+      session,
+      body: message,
+      senderType: "user",
+      senderId: req.user.id,
+      senderName,
+      io,
+    });
+    session.status = nextStatus;
     res.json({ success: true, message: payload, sessionId: session.id });
   } catch (e) {
     console.error("chat/message:", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.post("/guest/session", async (req, res) => {
+  try {
+    const rawName = (req.body?.name || "").trim();
+    if (!rawName) return res.status(400).json({ error: "MISSING_NAME", message: "Enter your full name to start chatting." });
+    const wordCount = rawName.split(/\s+/).filter(Boolean).length;
+    if (wordCount < 2) {
+      return res.status(400).json({ error: "INVALID_NAME", message: "Please provide your full name so we can assist you properly." });
+    }
+    const { session, token } = await createGuestSession(rawName);
+    res.json({
+      token,
+      session: rowToSession(session, { guestToken: token }),
+      messages: [],
+    });
+  } catch (e) {
+    console.error("chat/guest/session:create", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/guest/session", async (req, res) => {
+  try {
+    const token = (req.query?.token || "").trim();
+    if (!token) return res.status(400).json({ error: "MISSING_TOKEN", message: "Missing chat reference." });
+    const found = await findGuestSessionByToken(token);
+    if (!found) return res.status(404).json({ error: "NOT_FOUND", message: "Guest chat not found." });
+    const { session, token: storedToken } = found;
+    const [messages] = await q(`SELECT id, sessionId, senderType, senderId, senderName, body, createdAt FROM ChatMessage WHERE sessionId=? ORDER BY createdAt ASC`, [session.id]);
+    res.json({
+      session: rowToSession(session, { guestToken: storedToken }),
+      messages: messages.map(rowToMessage),
+    });
+  } catch (e) {
+    console.error("chat/guest/session:get", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.post("/guest/message", async (req, res) => {
+  try {
+    const { token, message } = req.body || {};
+    const trimmedToken = (token || "").trim();
+    if (!trimmedToken) return res.status(400).json({ error: "MISSING_TOKEN", message: "Missing chat reference." });
+    if (!message || !message.trim()) return res.status(400).json({ error: "MISSING_MESSAGE" });
+    const found = await findGuestSessionByToken(trimmedToken);
+    if (!found) return res.status(404).json({ error: "NOT_FOUND", message: "Guest chat not found." });
+    const { session } = found;
+    if (session.status === "closed") return res.status(409).json({ error: "CHAT_CLOSED", message: "This conversation is closed. Start a new chat if you need more help." });
+    const senderName = session.userName || "Guest";
+    const io = req.app.get("io");
+    const { payload, nextStatus } = await recordInboundMessage({
+      session,
+      body: message,
+      senderType: "guest",
+      senderId: null,
+      senderName,
+      io,
+    });
+    session.status = nextStatus;
+    res.json({ success: true, message: payload, sessionId: session.id });
+  } catch (e) {
+    console.error("chat/guest/message:", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.post("/guest/session/close", async (req, res) => {
+  try {
+    const token = (req.body?.token || "").trim();
+    if (!token) return res.status(400).json({ error: "MISSING_TOKEN", message: "Missing chat reference." });
+    const found = await findGuestSessionByToken(token);
+    if (!found) return res.status(404).json({ error: "NOT_FOUND", message: "Guest chat not found." });
+    const { session } = found;
+    if (session.status === "closed") return res.json({ success: true });
+    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
+    const io = req.app.get("io");
+    io?.emit("chat:sessions:update");
+    io?.to(`chat:${session.id}`).emit("chat:session:update", { id: session.id, status: "closed" });
+    res.json({ success: true });
+  } catch (e) {
+    console.error("chat/guest/session/close:", e);
     res.status(500).json({ error: "SERVER" });
   }
 });

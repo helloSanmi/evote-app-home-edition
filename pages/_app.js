@@ -1,6 +1,6 @@
 // pages/_app.js
 import "../styles/globals.css";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -9,9 +9,12 @@ import Layout from "../components/Layout";
 import { notifyInfo, notifyError } from "../components/Toast";
 import { apiPost } from "../lib/apiBase";
 import { getSocket, reidentifySocket } from "../lib/socket";
+import LoadingCurtain from "../components/LoadingCurtain";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeMessage, setRouteMessage] = useState("Preparing your next view…");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -44,6 +47,29 @@ export default function App({ Component, pageProps }) {
     return () => socket.off("roleUpdated", handleRoleUpdated);
   }, [router]);
 
+  useEffect(() => {
+    const handleStart = (url) => {
+      const pretty = url.includes("/admin")
+        ? "Opening the admin console…"
+        : url.includes("/results")
+        ? "Fetching the latest results…"
+        : url.includes("/vote")
+        ? "Loading ballots for you…"
+        : "Preparing your next view…";
+      setRouteMessage(pretty);
+      setRouteLoading(true);
+    };
+    const handleEnd = () => setRouteLoading(false);
+    router.events.on("routeChangeStart", handleStart);
+    router.events.on("routeChangeComplete", handleEnd);
+    router.events.on("routeChangeError", handleEnd);
+    return () => {
+      router.events.off("routeChangeStart", handleStart);
+      router.events.off("routeChangeComplete", handleEnd);
+      router.events.off("routeChangeError", handleEnd);
+    };
+  }, [router]);
+
   return (
     <>
       <Head>
@@ -53,6 +79,7 @@ export default function App({ Component, pageProps }) {
       <Layout>
         <Component {...pageProps} />
       </Layout>
+      <LoadingCurtain active={routeLoading} message={routeMessage} variant="subtle" />
       <ToastContainer position="top-center" />
     </>
   );

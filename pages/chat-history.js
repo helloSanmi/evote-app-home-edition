@@ -161,7 +161,7 @@ export default function ChatHistory() {
                 const active = item.id === selectedId;
                 const tone = statusMap[item.status] || statusMap.closed;
                 const title = isAdmin
-                  ? item.userName || `User #${item.userId}`
+                  ? item.userDisplayName || item.userName || `User #${item.userId}`
                   : item.assignedAdminName
                   ? `Chat with ${item.assignedAdminName}`
                   : "Assistant";
@@ -204,10 +204,13 @@ export default function ChatHistory() {
                       ? `Chat with ${selectedMeta.assignedAdminName}`
                       : "Assistant conversation"}
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    Started {selectedMeta?.createdAt ? new Date(selectedMeta.createdAt).toLocaleString() : "—"}
-                  </p>
-                </div>
+                <p className="text-xs text-slate-500">
+                  Started {selectedMeta?.createdAt ? new Date(selectedMeta.createdAt).toLocaleString() : "—"}
+                </p>
+                {isAdmin && selectedMeta?.userDisplayName && (
+                  <p className="text-xs text-slate-400">Full name: {selectedMeta.userDisplayName}</p>
+                )}
+              </div>
                 <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                   {selectedMeta?.status && (
                     <span className={`rounded-full px-3 py-1 font-semibold uppercase ${(statusMap[selectedMeta.status] || statusMap.closed).tone}`}>

@@ -57,6 +57,18 @@ async function ensureChatTables() {
       CREATE INDEX IX_ChatMessage_Session ON dbo.ChatMessage(sessionId, createdAt DESC);
     END;
   `);
+
+  await q(`
+    IF OBJECT_ID('dbo.ChatGuestToken', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.ChatGuestToken (
+        sessionId INT NOT NULL PRIMARY KEY,
+        token NVARCHAR(200) NOT NULL UNIQUE,
+        createdAt DATETIME2 NOT NULL CONSTRAINT DF_ChatGuestToken_createdAt DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_ChatGuestToken_Session FOREIGN KEY (sessionId) REFERENCES dbo.ChatSession(id) ON DELETE CASCADE
+      );
+    END;
+  `);
 }
 
 function envSet(value) {
