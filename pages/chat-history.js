@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
-import { apiGet } from "../lib/apiBase";
-import { notifyError } from "../components/Toast";
+import { apiDelete, apiGet } from "../lib/apiBase";
+import { notifyError, notifySuccess } from "../components/Toast";
 
 const statusMap = {
   pending: { label: "Waiting", tone: "bg-amber-100 text-amber-700" },
@@ -22,12 +22,14 @@ export default function ChatHistory() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [archives, setArchives] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedMeta, setSelectedMeta] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -38,6 +40,7 @@ export default function ChatHistory() {
     }
     const role = (localStorage.getItem("role") || "user").toLowerCase();
     setIsAdmin(role === "admin" || role === "super-admin");
+    setIsSuperAdmin(role === "super-admin");
     setReady(true);
   }, [router]);
 
@@ -107,6 +110,27 @@ export default function ChatHistory() {
       notifyError(err.message || "Unable to load conversation");
     } finally {
       setLoadingMessages(false);
+    }
+  }
+
+  async function deleteConversation(id) {
+    if (!id || deleting) return;
+    const confirmed = window.confirm("Delete this chat permanently? This cannot be undone.");
+    if (!confirmed) return;
+    setDeleting(true);
+    try {
+      await apiDelete(`/api/chat/sessions/${id}`);
+      notifySuccess("Chat history deleted");
+      setArchives((prev) => prev.filter((item) => item.id !== id));
+      if (selectedId === id) {
+        setSelectedId(null);
+        setSelectedMeta(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      notifyError(err.message || "Unable to delete chat");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -194,6 +218,16 @@ export default function ChatHistory() {
                     <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase text-slate-600">
                       Admin: {selectedMeta.assignedAdminName}
                     </span>
+                  )}
+                  {isSuperAdmin && selectedId && (
+                    <button
+                      type="button"
+                      onClick={() => deleteConversation(selectedId)}
+                      className="rounded-full border border-rose-200 px-3 py-1 font-semibold uppercase text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 disabled:opacity-70"
+                      disabled={deleting}
+                    >
+                      {deleting ? "Deleting…" : "Delete chat"}
+                    </button>
                   )}
                 </div>
               </div>

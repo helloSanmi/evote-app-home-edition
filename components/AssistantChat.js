@@ -269,12 +269,14 @@ export default function AssistantChat() {
   return (
     <div className="fixed bottom-5 right-5 z-[120] flex flex-col items-end gap-3">
       {open && (
-        <div className="w-[min(100vw-1.5rem,250px)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+        <div className="w-[min(100vw-2rem,320px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
           <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
             <div className="flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-[10px] text-white">🤖</span>
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-700 text-[12px] text-white shadow-sm">
+                🤖
+              </span>
               <div className="flex flex-col leading-tight">
-                <span className="text-[13px] font-semibold text-slate-900">{isAdmin ? "Support" : "Assistant"}</span>
+                <span className="text-[13px] font-semibold text-slate-900">{isAdmin ? "Support desk" : "Assistant"}</span>
                 <span className="flex items-center gap-1 text-[9px] font-medium text-emerald-500">
                   <span className="h-1 w-1 rounded-full bg-emerald-500" />
                   Online
@@ -356,7 +358,7 @@ export default function AssistantChat() {
             </div>
           )}
 
-          <div ref={listRef} className="h-48 space-y-3 overflow-y-auto bg-slate-50 px-3 py-3 text-[13px] text-slate-600">
+          <div ref={listRef} className="h-52 space-y-3 overflow-y-auto bg-slate-50 px-3 py-3 text-[13px] text-slate-600">
             {loading && !renderingMessages.length ? (
               <div className="text-slate-500">Loading conversation…</div>
           ) : !selectedSession ? (
@@ -393,10 +395,10 @@ export default function AssistantChat() {
                     >
                       <div className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${bubbleClasses}`}>
                         <div className={`mb-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide ${metaTone}`}>
-                          <span>{senderLabel}</span>
-                          {timestamp && <span>{timestamp}</span>}
-                        </div>
-                        <p className="text-sm leading-relaxed">{message.body || message.text}</p>
+                            <span>{senderLabel}</span>
+                            {timestamp && <span>{timestamp}</span>}
+                          </div>
+                          <p className="text-[13px] leading-relaxed">{message.body || message.text}</p>
                       </div>
                     </div>
                   );
@@ -412,7 +414,7 @@ export default function AssistantChat() {
                   key={suggestion}
                   type="button"
                   onClick={() => handleSend(null, suggestion)}
-                  className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] font-medium text-slate-600 transition hover:border-indigo-200 hover:text-indigo-600"
+                  className="rounded-full border border-slate-200 bg-white/80 px-2 py-1 text-[10px] font-medium text-slate-500 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
                 >
                   {suggestion}
                 </button>
@@ -469,10 +471,10 @@ export default function AssistantChat() {
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-600 text-white shadow-lg transition hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60"
+        className="group flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-700 text-white shadow-xl transition hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
         aria-label="Open support chat"
       >
-        💬
+        <span className="text-lg transition-transform group-hover:scale-110">💬</span>
       </button>
     </div>
   );

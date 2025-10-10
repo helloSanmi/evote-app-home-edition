@@ -310,6 +310,24 @@ router.post("/sessions/:id/close", requireAuth, requireRole(["admin", "super-adm
   }
 });
 
+router.delete("/sessions/:id", requireAuth, requireRole(["super-admin"]), async (req, res) => {
+  try {
+    const sid = Number(req.params.id || 0);
+    if (!sid) return res.status(400).json({ error: "MISSING_ID" });
+    const [[session]] = await q(`SELECT id FROM ChatSession WHERE id=?`, [sid]);
+    if (!session) return res.status(404).json({ error: "NOT_FOUND" });
+    await q(`DELETE FROM ChatMessage WHERE sessionId=?`, [sid]);
+    await q(`DELETE FROM ChatSession WHERE id=?`, [sid]);
+    const io = req.app.get("io");
+    io?.emit("chat:sessions:update");
+    io?.to(`chat:${sid}`).emit("chat:session:update", { id: sid, status: "deleted" });
+    res.json({ success: true });
+  } catch (e) {
+    console.error("chat/sessions/delete:", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
 router.get("/session/history", requireAuth, async (req, res) => {
   try {
     const [rows] = await q(`SELECT TOP 20 id, status, assignedAdminName, lastMessageAt, createdAt FROM ChatSession WHERE userId=? ORDER BY createdAt DESC`, [req.user.id]);

@@ -15,6 +15,9 @@ export default function Register() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [confirmTouched, setConfirmTouched] = useState(false);
   const [state, setState] = useState("");
   const [residenceLGA, setLGA] = useState("");
   const [phone, setPhone] = useState("");
@@ -26,6 +29,11 @@ export default function Register() {
 
   async function submit(e) {
     e.preventDefault();
+    setConfirmTouched(true);
+    if (!password || password !== confirmPassword) {
+      notifyError("Passwords must match before continuing.");
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch(`${api}/api/auth/register`, {
@@ -53,6 +61,9 @@ export default function Register() {
       setBusy(false);
     }
   }
+
+  const showMismatch = confirmTouched && password !== confirmPassword;
+  const passwordFieldType = showPassword ? "text" : "password";
 
   return (
     <div className="mx-auto w-full max-w-5xl">
@@ -117,15 +128,51 @@ export default function Register() {
 
             <div>
               <label className="form-label" htmlFor="password">Password</label>
-              <input
-                id="password"
-                type="password"
-                className="form-control"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Create a strong password"
-                autoComplete="new-password"
-              />
+              <div className="relative">
+                <input
+                  id="password"
+                  type={passwordFieldType}
+                  className="form-control pr-20"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Create a strong password"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-1 flex items-center rounded-md px-3 text-sm font-semibold text-indigo-600 transition hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="form-label" htmlFor="confirmPassword">Confirm password</label>
+              <div className="relative">
+                <input
+                  id="confirmPassword"
+                  type={passwordFieldType}
+                  className={`form-control pr-20 ${showMismatch ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100" : ""}`}
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    if (!confirmTouched) setConfirmTouched(true);
+                    setConfirmPassword(e.target.value);
+                  }}
+                  onBlur={() => setConfirmTouched(true)}
+                  placeholder="Retype your password"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-1 flex items-center rounded-md px-3 text-sm font-semibold text-indigo-600 transition hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+              {showMismatch && <p className="mt-1 text-sm text-rose-600">Passwords do not match.</p>}
             </div>
 
             <div className="grid gap-5 md:grid-cols-2">
@@ -203,7 +250,11 @@ export default function Register() {
             </div>
 
             <div className="pt-2">
-              <button type="submit" disabled={busy} className="btn-primary w-full text-base md:w-auto">
+              <button
+                type="submit"
+                disabled={busy || showMismatch}
+                className="btn-primary w-full text-base md:w-auto disabled:cursor-not-allowed disabled:opacity-70"
+              >
                 {busy ? "Creating account…" : "Create account"}
               </button>
             </div>
