@@ -46,6 +46,69 @@ async function ensureRoleColumn() {
   await q(`ALTER TABLE Users MODIFY COLUMN hasVoted TINYINT(1) NOT NULL DEFAULT 0`);
 }
 
+async function ensureChatStatusColumn() {
+  const [[statusColumn]] = await q(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='Users' AND COLUMN_NAME='chatStatus'`
+  );
+  if (!statusColumn) {
+    await q(`ALTER TABLE Users ADD COLUMN chatStatus VARCHAR(10) NOT NULL DEFAULT 'offline' AFTER isAdmin`);
+    await q(`UPDATE Users SET chatStatus='offline' WHERE chatStatus IS NULL OR chatStatus=''`);
+  } else {
+    await q(`ALTER TABLE Users MODIFY COLUMN chatStatus VARCHAR(10) NOT NULL DEFAULT 'offline'`);
+    await q(`UPDATE Users SET chatStatus='offline' WHERE chatStatus IS NULL OR chatStatus=''`);
+  }
+}
+
+async function ensureGoogleIdColumn() {
+  const [[googleColumn]] = await q(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='Users' AND COLUMN_NAME='googleId'`
+  );
+  if (!googleColumn) {
+    await q(`ALTER TABLE Users ADD COLUMN googleId VARCHAR(64) NULL UNIQUE AFTER chatStatus`);
+  }
+}
+
+async function ensureIndex(table, indexName, sql) {
+  const [[exists]] = await q(
+    `SELECT INDEX_NAME
+     FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?`,
+    [table, indexName]
+  );
+  if (!exists) {
+    await q(sql);
+  }
+}
+
+async function ensureUserLifecycleColumns() {
+  const lifecycleColumns = [
+    { name: "lastLoginAt", sql: "ALTER TABLE Users ADD COLUMN lastLoginAt DATETIME NULL AFTER profilePhoto" },
+    { name: "deletedAt", sql: "ALTER TABLE Users ADD COLUMN deletedAt DATETIME NULL AFTER lastLoginAt" },
+    { name: "purgeAt", sql: "ALTER TABLE Users ADD COLUMN purgeAt DATETIME NULL AFTER deletedAt" },
+    { name: "restoreToken", sql: "ALTER TABLE Users ADD COLUMN restoreToken VARCHAR(128) NULL AFTER purgeAt" },
+  ];
+
+  for (const column of lifecycleColumns) {
+    const [[exists]] = await q(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='Users' AND COLUMN_NAME=?`,
+      [column.name]
+    );
+    if (!exists) {
+      await q(column.sql);
+    }
+  }
+
+  await ensureIndex("Users", "idx_users_deleted", "ALTER TABLE Users ADD KEY idx_users_deleted (deletedAt)");
+  await ensureIndex("Users", "idx_users_purge", "ALTER TABLE Users ADD KEY idx_users_purge (purgeAt)");
+  await ensureIndex("Users", "idx_users_last_login", "ALTER TABLE Users ADD KEY idx_users_last_login (lastLoginAt)");
+}
+
 async function ensureChatTables() {
   await q(`
     CREATE TABLE IF NOT EXISTS ChatSession (
@@ -91,6 +154,49 @@ function envSet(value) {
   return new Set((value || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
 }
 
+async function ensureRequestLogColumns() {
+  const columns = [
+    { name: "statusCode", sql: "ALTER TABLE RequestLogs ADD COLUMN statusCode INT NULL AFTER ip" },
+    { name: "durationMs", sql: "ALTER TABLE RequestLogs ADD COLUMN durationMs INT NULL AFTER statusCode" },
+    { name: "queryParams", sql: "ALTER TABLE RequestLogs ADD COLUMN queryParams TEXT NULL AFTER durationMs" },
+    { name: "bodyParams", sql: "ALTER TABLE RequestLogs ADD COLUMN bodyParams TEXT NULL AFTER queryParams" },
+  ];
+
+  for (const column of columns) {
+    const [[exists]] = await q(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='RequestLogs' AND COLUMN_NAME=?`,
+      [column.name]
+    );
+    if (!exists) {
+      await q(column.sql);
+    }
+  }
+}
+
+async function ensureAuditLogTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS AuditLog (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      actorId INT NULL,
+      actorRole VARCHAR(30) NULL,
+      action VARCHAR(120) NOT NULL,
+      entityType VARCHAR(60) NOT NULL,
+      entityId VARCHAR(120) NULL,
+      beforeState JSON NULL,
+      afterState JSON NULL,
+      ip VARCHAR(64) NULL,
+      notes VARCHAR(500) NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_auditlog_actor FOREIGN KEY (actorId) REFERENCES Users(id) ON DELETE SET NULL,
+      KEY idx_auditlog_created (createdAt),
+      KEY idx_auditlog_actor (actorId),
+      KEY idx_auditlog_entity (entityType, entityId)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
 async function alignRolesWithFlags() {
   const adminUsernames = envSet(process.env.ADMIN_USERNAMES);
   const adminEmails = envSet(process.env.ADMIN_EMAILS);
@@ -129,8 +235,13 @@ async function alignRolesWithFlags() {
 async function ensureSchema() {
   await ensureBaseSchema();
   await ensureRoleColumn();
+  await ensureChatStatusColumn();
+  await ensureGoogleIdColumn();
+  await ensureUserLifecycleColumns();
   await ensureChatTables();
   await alignRolesWithFlags();
+  await ensureRequestLogColumns();
+  await ensureAuditLogTable();
 }
 
 module.exports = { ensureSchema };

@@ -13,6 +13,7 @@ import { notifyError, notifySuccess } from "../components/Toast";
 import NG from "../public/ng-states-lgas.json";
 import { getSocket } from "../lib/socket";
 import ConfirmDialog from "../components/ConfirmDialog";
+import { mediaUrl } from "../lib/mediaUrl";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -72,6 +73,10 @@ export default function AdminPage() {
   const [resetPassword, setResetPassword] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
   const [updatingRoleId, setUpdatingRoleId] = useState(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState(null);
+  const [rescheduleStart, setRescheduleStart] = useState("");
+  const [rescheduleEnd, setRescheduleEnd] = useState("");
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
   const sessionSteps = useMemo(() => [
     { id: 1, label: "Scope" },
     { id: 2, label: "Details" },
@@ -103,6 +108,11 @@ export default function AdminPage() {
     { id: "users", label: "Users" },
     { id: "logs", label: "Request Logs" },
   ], []);
+  const visibleTabs = useMemo(() => (
+    viewerRole === "super-admin"
+      ? tabs
+      : tabs.filter((tabItem) => tabItem.id !== "logs")
+  ), [tabs, viewerRole]);
 
   const roleSummaries = useMemo(() => [
     {
@@ -193,6 +203,12 @@ export default function AdminPage() {
   }, [tab]);
 
   useEffect(() => {
+    if (!visibleTabs.some((item) => item.id === tab)) {
+      setTab(visibleTabs[0]?.id || "overview");
+    }
+  }, [visibleTabs, tab]);
+
+  useEffect(() => {
     if (sessionStep === 3) {
       loadUnpublished({ silent: true, suppressErrors: true });
     }
@@ -239,6 +255,21 @@ export default function AdminPage() {
   };
   const isUpcoming = (period) => Date.now() < new Date(period.startTime).getTime() && !period.resultsPublished;
   const awaitingPublish = (period) => Date.now() >= new Date(period.endTime).getTime() && !period.resultsPublished;
+
+  const toInputDateTime = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const offset = date.getTimezoneOffset() * 60000;
+    const local = new Date(date.getTime() - offset);
+    return local.toISOString().slice(0, 16);
+  };
+
+  const openReschedule = (period) => {
+    setRescheduleTarget(period);
+    setRescheduleStart(toInputDateTime(period.startTime));
+    setRescheduleEnd(toInputDateTime(period.endTime));
+  };
 
   const stats = useMemo(() => ({
     active: sessions.filter(isActive).length,
@@ -511,6 +542,40 @@ export default function AdminPage() {
     }
   }
 
+  async function submitReschedule() {
+    if (!rescheduleTarget) return;
+    if (!rescheduleStart || !rescheduleEnd) {
+      notifyError("Provide both new start and end times");
+      return;
+    }
+    const startDate = new Date(rescheduleStart);
+    const endDate = new Date(rescheduleEnd);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      notifyError("Use valid date and time values");
+      return;
+    }
+    if (endDate.getTime() <= startDate.getTime()) {
+      notifyError("End time must occur after the start time");
+      return;
+    }
+    setRescheduleLoading(true);
+    try {
+      await apiPost(`/api/admin/periods/${rescheduleTarget.id}/reschedule`, {
+        startTime: startDate.toISOString(),
+        endTime: endDate.toISOString(),
+      });
+      notifySuccess("Session rescheduled");
+      setRescheduleTarget(null);
+      setRescheduleStart("");
+      setRescheduleEnd("");
+      await loadSessions({ silent: true });
+    } catch (err) {
+      notifyError(err.message || "Could not reschedule session");
+    } finally {
+      setRescheduleLoading(false);
+    }
+  }
+
   async function refreshLive() {
     try {
       const activeSessions = sessions.filter(isActive);
@@ -768,10 +833,23 @@ export default function AdminPage() {
     ? candidateLgas
     : (states.find((state) => state.label === scopeState)?.lgas || []);
   const formatDateValue = (value, withTime = false) => {
-    if (!value) return "—";
+    if (!value) return "N/A";
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     return withTime ? date.toLocaleString() : date.toLocaleDateString();
+  };
+  const formatCountdown = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const diff = date.getTime() - Date.now();
+    if (diff <= 0) return "pending removal";
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return `${minutes || 1} minute${minutes === 1 ? "" : "s"} remaining`;
+    const hours = Math.floor(diff / 3600000);
+    if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} remaining`;
+    const days = Math.ceil(diff / 86400000);
+    return `${days} day${days === 1 ? "" : "s"} remaining`;
   };
   const isUserDisabled = (user) => String(user?.eligibilityStatus ?? "").trim().toLowerCase() === "disabled";
   const statusBadgeTone = (status) => {
@@ -883,7 +961,7 @@ export default function AdminPage() {
       </header>
 
       <nav className="sticky top-20 z-30 mb-6 flex flex-wrap gap-2 overflow-x-auto rounded-full border border-slate-200 bg-white/90 px-3 py-2 shadow-sm backdrop-blur-md">
-        {tabs.map((item) => (
+        {visibleTabs.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -950,7 +1028,7 @@ export default function AdminPage() {
                       ))}
                     </ul>
                     {isMe && (
-                      <span className="mt-4 inline-flex w-max rounded-full bg-indigo-600 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-white">
+                      <span className="mt-4 inline-flex w-max rounded-full bg-indigo-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-indigo-800">
                         Your role
                       </span>
                     )}
@@ -987,7 +1065,7 @@ export default function AdminPage() {
                       } ${step.id > sessionStep ? "opacity-60" : ""}`}
                     >
                       <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
-                        isComplete ? "bg-emerald-500 text-white" : isActive ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
+                        isComplete ? "bg-emerald-500 text-white" : isActive ? "bg-indigo-300 text-indigo-900" : "bg-slate-200 text-slate-600"
                       }`}>{index + 1}</span>
                       <span>{step.label}</span>
                     </button>
@@ -1138,13 +1216,13 @@ export default function AdminPage() {
                         {scope !== "national" && (
                           <div className="flex justify-between gap-4">
                             <dt>State</dt>
-                            <dd className="font-medium text-slate-900">{scopeState || "—"}</dd>
+                            <dd className="font-medium text-slate-900">{scopeState || "N/A"}</dd>
                           </div>
                         )}
                         {scope === "local" && (
                           <div className="flex justify-between gap-4">
                             <dt>LGA</dt>
-                            <dd className="font-medium text-slate-900">{scopeLGA || "—"}</dd>
+                            <dd className="font-medium text-slate-900">{scopeLGA || "N/A"}</dd>
                           </div>
                         )}
                         <div className="flex justify-between gap-4">
@@ -1259,7 +1337,7 @@ export default function AdminPage() {
                                 />
                                 <div>
                                   <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
-                                  <div className="text-xs text-slate-500">{candidate.state || "—"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
+                                  <div className="text-xs text-slate-500">{candidate.state || "N/A"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
                                 </div>
                               </div>
                               <button
@@ -1281,7 +1359,7 @@ export default function AdminPage() {
                                 <div key={candidate.id} className="flex items-center justify-between rounded-xl border border-amber-200/70 bg-white/80 p-3">
                                   <div>
                                     <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
-                                    <div className="text-xs text-slate-500">{candidate.state || "—"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
+                                    <div className="text-xs text-slate-500">{candidate.state || "N/A"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
                                   </div>
                                   <button
                                     type="button"
@@ -1345,7 +1423,7 @@ export default function AdminPage() {
                           </span>
                         </div>
                         <p className="text-xs text-slate-500">
-                          {new Date(period.startTime).toLocaleString()} — {new Date(period.endTime).toLocaleString()}
+                          {new Date(period.startTime).toLocaleString()} to {new Date(period.endTime).toLocaleString()}
                         </p>
                         <p className="text-xs text-slate-500">
                           Scope: <span className="font-medium uppercase text-slate-800">{period.scope}</span>
@@ -1354,6 +1432,11 @@ export default function AdminPage() {
                         </p>
                       </div>
                       <div className="mt-4 flex flex-wrap gap-2">
+                        {isUpcoming(period) && viewerRole === "super-admin" && (
+                          <button type="button" className="btn-secondary" onClick={() => openReschedule(period)}>
+                            Reschedule
+                          </button>
+                        )}
                         {awaitingPublish(period) && (
                           <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period })}>
                             Publish results
@@ -1403,7 +1486,7 @@ export default function AdminPage() {
                   >
                     <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
                     <div className="text-xs text-slate-500">
-                      {new Date(period.startTime).toLocaleString()} — {new Date(period.endTime).toLocaleString()}
+                      {new Date(period.startTime).toLocaleString()} to {new Date(period.endTime).toLocaleString()}
                     </div>
                     <div className="text-xs text-slate-500">
                       Scope: {period.scope}
@@ -1425,7 +1508,7 @@ export default function AdminPage() {
               <div>
                 <div className="text-sm font-semibold text-slate-900">{selPast.title || `Session #${selPast.id}`}</div>
                 <div className="text-xs text-slate-500">
-                  {new Date(selPast.startTime).toLocaleString()} — {new Date(selPast.endTime).toLocaleString()}
+                  {new Date(selPast.startTime).toLocaleString()} to {new Date(selPast.endTime).toLocaleString()}
                 </div>
                 <div className="text-xs text-slate-500">
                   Scope: {selPast.scope}
@@ -1503,141 +1586,166 @@ export default function AdminPage() {
             }
             defaultOpen
           >
-            <div className="overflow-x-auto rounded-2xl border border-slate-100">
+            <div className="space-y-4">
               {usersLoading ? (
-                <div className="p-6 text-sm text-slate-500 animate-pulse">Loading users…</div>
+                <div className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500 animate-pulse">Loading users…</div>
               ) : users.length === 0 ? (
-                <div className="p-6 text-sm text-slate-500">No registered users yet.</div>
+                <div className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500">No registered users yet.</div>
               ) : (
-                <table className="min-w-full divide-y divide-slate-100 text-sm">
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-3 py-3 text-left">Name</th>
-                      <th className="px-3 py-3 text-left">Contact</th>
-                      <th className="px-3 py-3 text-left">Location</th>
-                      <th className="px-3 py-3 text-left">Birth date</th>
-                      <th className="px-3 py-3 text-left">Role</th>
-                      <th className="px-3 py-3 text-left">Status</th>
-                      <th className="px-3 py-3 text-left">Registered</th>
-                      <th className="px-3 py-3 text-left">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {users.map((user) => {
-                      const targetRole = String(user.role || "user").toLowerCase();
-                      const rawStatus = String(user?.eligibilityStatus ?? "").trim();
-                      const statusKey = rawStatus ? rawStatus.toLowerCase() : "pending";
-                      const statusLabel = rawStatus
-                        ? `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).toLowerCase()}`
-                        : "Pending";
-                      const disabled = statusKey === "disabled";
-                      const roleLabel = (() => {
-                        if (targetRole === "super-admin") return "Super Admin";
-                        if (targetRole === "admin") return "Admin";
-                        return "User";
-                      })();
-                      const canReset = ["admin", "super-admin"].includes(viewerRole);
-                      const canModifyTarget = targetRole !== "super-admin" || viewerRole === "super-admin";
-                      const roleBusy = updatingRoleId === user.id;
-                      return (
-                        <tr key={user.id} className="align-top">
-                          <td className="px-3 py-4">
-                            <div className="text-sm font-semibold text-slate-900">{user.fullName || user.username || "—"}</div>
-                            <div className="text-xs text-slate-500">ID #{user.id}{user.username ? ` • ${user.username}` : ""}</div>
-                          </td>
-                          <td className="px-3 py-4 text-xs text-slate-600">
-                            <div className="font-medium text-slate-700">{user.email || "—"}</div>
-                            {user.phone && <div className="text-slate-500">{user.phone}</div>}
-                          </td>
-                          <td className="px-3 py-4 text-xs text-slate-600">
-                            <div>{user.state || "—"}</div>
-                            <div className="text-slate-500">{user.residenceLGA || "—"}</div>
-                            {user.nationality && <div className="mt-1 text-[11px] uppercase tracking-wide text-slate-400">{user.nationality}</div>}
-                          </td>
-                          <td className="px-3 py-4 text-xs text-slate-600">{formatDateValue(user.dateOfBirth)}</td>
-                          <td className="px-3 py-4">
-                            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${roleBadgeTone(targetRole)}`}>
-                              {roleLabel}
-                            </span>
-                          </td>
-                          <td className="px-3 py-4">
-                            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusBadgeTone(statusKey)}`}>
+                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                  {users.map((user) => {
+                    const targetRole = String(user.role || "user").toLowerCase();
+                    const rawStatus = String(user?.eligibilityStatus ?? "").trim();
+                    const statusKey = rawStatus ? rawStatus.toLowerCase() : "pending";
+                    const statusLabel = rawStatus
+                      ? `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).toLowerCase()}`
+                      : "Pending";
+                    const disabled = statusKey === "disabled";
+                    const roleLabel = (() => {
+                      if (targetRole === "super-admin") return "Super Admin";
+                      if (targetRole === "admin") return "Admin";
+                      return "User";
+                    })();
+                    const isSuper = targetRole === "super-admin";
+                    const canReset = ["admin", "super-admin"].includes(viewerRole) && !isSuper;
+                    const canChangeRole = viewerRole === "super-admin" && !isSuper;
+                    const canManageStatus = !isSuper;
+                    const roleBusy = updatingRoleId === user.id;
+                    const avatar = mediaUrl(user.profilePhoto || "/avatar.png");
+                    const pendingDeletion = Boolean(user.deletedAt);
+                    const purgeCountdown = formatCountdown(user.purgeAt);
+                    const lastLogin = user.lastLoginAt ? formatDateValue(user.lastLoginAt, true) : "Never";
+                    return (
+                      <article key={user.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm shadow-indigo-500/5">
+                        <div className="flex flex-col gap-3">
+                          <div className="flex flex-wrap items-start gap-3">
+                            <img
+                              src={avatar}
+                              alt={user.fullName || user.username || `User #${user.id}`}
+                              className="h-12 w-12 rounded-xl object-cover ring-1 ring-slate-200/70"
+                              onError={(e) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.src = "/avatar.png";
+                              }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <h3 className="truncate text-base font-semibold text-slate-900">{user.fullName || user.username || "Unknown user"}</h3>
+                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${roleBadgeTone(targetRole)}`}>
+                                  {roleLabel}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-slate-500">ID #{user.id}{user.username ? ` • ${user.username}` : ""}</p>
+                              <div className="mt-1 space-y-1 text-xs text-slate-600">
+                                <div className="font-medium text-slate-700">{user.email || "No email"}</div>
+                                {user.phone && <div>{user.phone}</div>}
+                                <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-slate-400">
+                                  <span>Created {formatDateValue(user.createdAt, true)}</span>
+                                  <span>Last login {lastLogin}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                            <span className={`inline-flex items-center rounded-full px-3 py-1 ${statusBadgeTone(statusKey)}`}>
                               {statusLabel}
                             </span>
-                          </td>
-                          <td className="px-3 py-4 text-xs text-slate-600">{formatDateValue(user.createdAt, true)}</td>
-                          <td className="px-3 py-4">
-                            <div className="flex flex-wrap gap-2">
-                              {viewerRole === "super-admin" && (
-                                <div className="flex flex-wrap gap-2 rounded-full bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-500">
-                                  <span>Role:</span>
-                                  <button
-                                    type="button"
-                                    disabled={!canModifyTarget || roleBusy || targetRole === "admin"}
-                                    onClick={() => updateUserRole(user, "admin")}
-                                    className={`rounded-full px-3 py-1 transition ${
-                                      targetRole === "admin"
-                                        ? "bg-indigo-600 text-white shadow"
-                                        : "border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
-                                    }`}
-                                  >
-                                    Admin
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={!canModifyTarget || roleBusy || targetRole === "user"}
-                                    onClick={() => updateUserRole(user, "user")}
-                                    className={`rounded-full px-3 py-1 transition ${
-                                      targetRole === "user"
-                                        ? "bg-slate-600 text-white shadow"
-                                        : "border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-                                    }`}
-                                  >
-                                    User
-                                  </button>
-                                </div>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => setPendingAction({ type: disabled ? "user-enable" : "user-disable", user })}
-                                className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                  disabled
-                                    ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-                                    : "border-amber-200 text-amber-600 hover:bg-amber-50"
-                                } ${!canModifyTarget ? "opacity-50" : ""}`}
-                                disabled={!canModifyTarget || roleBusy}
-                              >
-                                {disabled ? "Enable" : "Disable"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setPendingAction({ type: "user-delete", user })}
-                                className="inline-flex items-center rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
-                                disabled={!canModifyTarget || roleBusy}
-                              >
-                                Delete
-                              </button>
-                              {canReset && (
+                            {user.state && (
+                              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-slate-600">
+                                {user.state}{user.residenceLGA ? ` • ${user.residenceLGA}` : ""}
+                              </span>
+                            )}
+                            {user.dateOfBirth && (
+                              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-slate-600">
+                                DOB {formatDateValue(user.dateOfBirth)}
+                              </span>
+                            )}
+                          </div>
+
+                          {pendingDeletion && (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
+                              Scheduled for deletion {purgeCountdown || "imminently"}
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            {canChangeRole && (
+                              <div className="flex flex-wrap items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-500">
+                                <span>Role</span>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    if (!canModifyTarget) return;
-                                    setResettingUser(user);
-                                    setResetPassword("");
-                                  }}
-                                  disabled={!canModifyTarget || roleBusy}
-                                  className="inline-flex items-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                                  disabled={roleBusy || targetRole === "admin"}
+                                  onClick={() => updateUserRole(user, "admin")}
+                                  className={`rounded-full px-3 py-1 transition ${
+                                    targetRole === "admin"
+                                      ? "border border-indigo-300 bg-indigo-100 text-indigo-800 shadow-sm"
+                                      : "border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                  }`}
                                 >
-                                  Reset password
+                                  Admin
                                 </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                                <button
+                                  type="button"
+                                  disabled={roleBusy || targetRole === "user"}
+                                  onClick={() => updateUserRole(user, "user")}
+                                  className={`rounded-full px-3 py-1 transition ${
+                                    targetRole === "user"
+                                      ? "border border-slate-300 bg-slate-100 text-slate-800 shadow-sm"
+                                      : "border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                                  }`}
+                                >
+                                  User
+                                </button>
+                              </div>
+                            )}
+                            {canManageStatus ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingAction({ type: disabled ? "user-enable" : "user-disable", user })}
+                                  className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                                    disabled
+                                      ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                                      : "border-amber-200 text-amber-600 hover:bg-amber-50"
+                                  } ${roleBusy ? "opacity-50" : ""}`}
+                                  disabled={roleBusy}
+                                >
+                                  {disabled ? "Enable" : "Disable"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingAction({ type: "user-delete", user })}
+                                  className="inline-flex items-center rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
+                                  disabled={roleBusy}
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            ) : (
+                              <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-500">
+                                Protected account
+                              </span>
+                            )}
+                            {canReset && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setResettingUser(user);
+                                  setResetPassword("");
+                                }}
+                                disabled={roleBusy}
+                                className="inline-flex items-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                              >
+                                Reset password
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </CollapsibleSection>
@@ -1736,7 +1844,7 @@ export default function AdminPage() {
                         onClick={() => updateNewUserField("role", option.value)}
                         className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                           newUserForm.role === option.value
-                            ? "bg-indigo-600 text-white shadow"
+                            ? "border border-indigo-300 bg-indigo-100 text-indigo-800 shadow-sm"
                             : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
                         }`}
                       >
@@ -1756,7 +1864,24 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "logs" && <LogsPanel />}
+      {tab === "logs" && <LogsPanel viewerRole={viewerRole} />}
+
+      <RescheduleDialog
+        open={!!rescheduleTarget}
+        period={rescheduleTarget}
+        startValue={rescheduleStart}
+        endValue={rescheduleEnd}
+        loading={rescheduleLoading}
+        onStartChange={setRescheduleStart}
+        onEndChange={setRescheduleEnd}
+        onClose={() => {
+          if (rescheduleLoading) return;
+          setRescheduleTarget(null);
+          setRescheduleStart("");
+          setRescheduleEnd("");
+        }}
+        onSubmit={submitReschedule}
+      />
 
       <ConfirmDialog
         open={!!pendingAction}
@@ -1785,6 +1910,65 @@ export default function AdminPage() {
   );
 }
 
+function RescheduleDialog({ open, period, startValue, endValue, loading, onStartChange, onEndChange, onClose, onSubmit }) {
+  if (!open || !period) return null;
+  return (
+    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/60 px-4">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl" role="dialog" aria-modal="true">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-900">Reschedule session</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 w-8 rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+            aria-label="Close reschedule dialog"
+            disabled={loading}
+          >
+            ×
+          </button>
+        </div>
+        <p className="mt-1 text-sm text-slate-500">
+          Updating schedule for <span className="font-medium text-slate-800">{period.title || `Session #${period.id}`}</span>.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="form-label" htmlFor="reschedule-start">New start time</label>
+            <input
+              id="reschedule-start"
+              type="datetime-local"
+              className="form-control"
+              value={startValue}
+              onChange={(e) => onStartChange(e.target.value)}
+              disabled={loading}
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="reschedule-end">New end time</label>
+            <input
+              id="reschedule-end"
+              type="datetime-local"
+              className="form-control"
+              value={endValue}
+              onChange={(e) => onEndChange(e.target.value)}
+              disabled={loading}
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="btn-secondary" disabled={loading}>
+            Cancel
+          </button>
+          <button type="button" onClick={onSubmit} className="btn-primary" disabled={loading}>
+            {loading ? "Saving…" : "Save schedule"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OverviewList({ title, sessions, emptyText, badge }) {
   const items = (sessions || []).slice(0, 3);
   return (
@@ -1800,7 +1984,7 @@ function OverviewList({ title, sessions, emptyText, badge }) {
           {items.map((session) => (
             <li key={session.id} className="flex flex-col">
               <span className="font-semibold text-slate-900">{session.title || `Session #${session.id}`}</span>
-              <span>{new Date(session.startTime).toLocaleString()} — {new Date(session.endTime).toLocaleString()}</span>
+              <span>{new Date(session.startTime).toLocaleString()} to {new Date(session.endTime).toLocaleString()}</span>
             </li>
           ))}
         </ul>
@@ -1901,8 +2085,8 @@ function ResetPasswordDialog({ open, user, password, loading, onPasswordChange, 
 function CollapsibleSection({ title, description, action, defaultOpen = true, children }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-[0_20px_70px_-50px_rgba(15,23,42,0.45)] backdrop-blur-sm md:p-8">
-      <header className="flex flex-wrap items-start justify-between gap-3">
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-[0_18px_50px_-45px_rgba(15,23,42,0.35)] backdrop-blur-sm md:p-6">
+      <header className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           {description && <p className="text-sm text-slate-500">{description}</p>}
@@ -1918,19 +2102,31 @@ function CollapsibleSection({ title, description, action, defaultOpen = true, ch
           </button>
         </div>
       </header>
-      {open && <div className="mt-5 space-y-4">{children}</div>}
+      {open && <div className="mt-4 space-y-3">{children}</div>}
     </section>
   );
 }
 
-function LogsPanel() {
+
+function LogsPanel({ viewerRole }) {
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);
+  const isSuper = viewerRole === "super-admin";
+  const [auditRows, setAuditRows] = useState(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditFilters, setAuditFilters] = useState({ actorId: "", start: "", end: "" });
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (isSuper) {
+      loadAudit({ silent: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuper]);
 
   async function load() {
     setLoading(true);
@@ -1941,6 +2137,28 @@ function LogsPanel() {
       setRows([]);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadAudit(options = {}) {
+    if (!isSuper) return;
+    const filters = options.filters || auditFilters;
+    setAuditLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filters.actorId?.trim()) params.append("actorId", filters.actorId.trim());
+      if (filters.start) params.append("start", filters.start);
+      if (filters.end) params.append("end", filters.end);
+      const query = params.toString();
+      const data = await apiGet(`/api/admin/audit-logs${query ? `?${query}` : ""}`);
+      setAuditRows(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setAuditRows([]);
+      if (!options.silent) {
+        notifyError(err.message || "Failed to load audit logs");
+      }
+    } finally {
+      setAuditLoading(false);
     }
   }
 
@@ -1968,6 +2186,60 @@ function LogsPanel() {
     }
   }
 
+  async function exportJson() {
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const res = await fetch(`${API_BASE}/api/admin/logs/export-json`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text?.slice(0, 200) || "Export failed");
+      const blob = new Blob([text], { type: "application/json;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "request_logs.json";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      notifySuccess("JSON export ready");
+    } catch (err) {
+      notifyError(err.message || "Failed to export logs as JSON");
+    }
+  }
+
+  async function exportAuditCsv() {
+    if (!isSuper) return;
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const params = new URLSearchParams();
+      if (auditFilters.actorId?.trim()) params.append("actorId", auditFilters.actorId.trim());
+      if (auditFilters.start) params.append("start", auditFilters.start);
+      if (auditFilters.end) params.append("end", auditFilters.end);
+      const query = params.toString();
+      const res = await fetch(`${API_BASE}/api/admin/audit-logs/export${query ? `?${query}` : ""}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text?.slice(0, 200) || "Export failed");
+      const blob = new Blob([text], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "audit_logs.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      notifySuccess("Audit trail exported");
+    } catch (err) {
+      notifyError(err.message || "Failed to export audit logs");
+    }
+  }
+
   const formatRelativeTime = (value) => {
     if (!value) return "";
     const date = new Date(value);
@@ -1983,66 +2255,196 @@ function LogsPanel() {
     return date.toLocaleString();
   };
 
+  const auditList = !isSuper ? null : auditRows;
+
   return (
-    <CollapsibleSection
-      title="Request logs"
-      description="Inspect the 500 most recent API hits to monitor usage."
-      action={
-        <div className="flex gap-2">
-          <button type="button" onClick={load} className="btn-secondary px-4 py-2 text-xs">Reload</button>
-          <button type="button" onClick={exportCsv} className="btn-primary px-4 py-2 text-xs">Export CSV</button>
-        </div>
-      }
-      defaultOpen
-    >
-      {loading || !rows ? (
-        <div className="p-6 text-sm text-slate-500 animate-pulse">Loading logs…</div>
-      ) : rows.length === 0 ? (
-        <div className="p-6 text-sm text-slate-500">No requests captured yet.</div>
-      ) : (
-        <div className="space-y-3">
-          {rows.map((row) => (
-            <article key={row.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase text-white ${
-                    row.method === "GET"
-                      ? "bg-emerald-500"
-                      : row.method === "POST"
-                        ? "bg-indigo-500"
-                        : row.method === "DELETE"
-                          ? "bg-rose-500"
-                          : "bg-slate-500"
-                  }`}>{row.method}</span>
-                  <span className="text-sm font-semibold text-slate-900">{row.path}</span>
+    <>
+      <CollapsibleSection
+        title="Request logs"
+        description="Inspect the 100 most recent significant API actions for troubleshooting."
+        action={
+          <div className="flex gap-2">
+            <button type="button" onClick={load} className="btn-secondary px-4 py-2 text-xs">Reload</button>
+            <button type="button" onClick={exportJson} className="btn-secondary px-4 py-2 text-xs">Export JSON</button>
+            <button type="button" onClick={exportCsv} className="btn-primary px-4 py-2 text-xs">Export CSV</button>
+          </div>
+        }
+        defaultOpen
+      >
+        {loading || !rows ? (
+          <div className="p-5 text-sm text-slate-500 animate-pulse">Loading logs…</div>
+        ) : rows.length === 0 ? (
+          <div className="p-5 text-sm text-slate-500">No requests captured yet.</div>
+        ) : (
+          <div className="space-y-3">
+            {rows.map((row) => (
+              <article key={row.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase ${
+                      row.method === "GET"
+                        ? "bg-emerald-500 text-white"
+                        : row.method === "POST"
+                          ? "bg-indigo-200 text-indigo-900"
+                          : row.method === "DELETE"
+                            ? "bg-rose-500 text-white"
+                            : "bg-slate-500 text-white"
+                    }`}>{row.method}</span>
+                    <span className="text-sm font-semibold text-slate-900">{row.path}</span>
+                  </div>
+                  <span className="text-xs text-slate-400">{formatRelativeTime(row.createdAt)}</span>
                 </div>
-                <span className="text-xs text-slate-400">{formatRelativeTime(row.createdAt)}</span>
-              </div>
-              <div className="mt-3 grid gap-2 text-[11px] uppercase tracking-wide text-slate-400 sm:grid-cols-4">
-                <div>
-                  <span className="font-semibold text-slate-500">User</span>
-                  <p className="mt-1 text-slate-700">{row.userId ?? "Guest"}</p>
+                <div className="mt-3 grid gap-2 text-[11px] uppercase tracking-wide text-slate-400 sm:grid-cols-5">
+                  <div>
+                    <span className="font-semibold text-slate-500">User</span>
+                    <p className="mt-1 text-slate-700">{row.userId ?? "Guest"}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-500">IP</span>
+                    <p className="mt-1 text-slate-700">{row.ip}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-500">Location</span>
+                    <p className="mt-1 text-slate-700">{row.city || "?"}{row.country ? `, ${row.country}` : ""}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-500">Status</span>
+                    <p className="mt-1 text-slate-700">{row.statusCode ?? "?"}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-500">Duration</span>
+                    <p className="mt-1 text-slate-700">{row.durationMs != null ? `${row.durationMs} ms` : "?"}</p>
+                  </div>
                 </div>
-                <div>
-                  <span className="font-semibold text-slate-500">IP</span>
-                  <p className="mt-1 text-slate-700">{row.ip}</p>
+                <div className="mt-3 grid gap-2 text-[11px] uppercase tracking-wide text-slate-400 sm:grid-cols-2">
+                  <div>
+                    <span className="font-semibold text-slate-500">Referrer</span>
+                    <p className="mt-1 truncate text-slate-700" title={row.referer}>{row.referer || "N/A"}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-500">User agent</span>
+                    <p className="mt-1 break-words text-slate-700" title={row.userAgent}>{row.userAgent || "N/A"}</p>
+                  </div>
                 </div>
-                <div>
-                  <span className="font-semibold text-slate-500">Location</span>
-                  <p className="mt-1 text-slate-700">{row.city || "?"}{row.country ? `, ${row.country}` : ""}</p>
-                </div>
-                <div>
-                  <span className="font-semibold text-slate-500">Referrer</span>
-                  <p className="mt-1 truncate text-slate-700" title={row.referer}>{row.referer || "—"}</p>
-                </div>
-              </div>
-              {row.userAgent && (
-                <p className="mt-2 line-clamp-2 text-xs text-slate-500" title={row.userAgent}>{row.userAgent}</p>
-              )}
-            </article>
-          ))}
-        </div>
+                {(row.queryParams || row.bodyParams) && (
+                  <div className="mt-3 space-y-2 text-[11px] text-slate-500">
+                    {row.queryParams && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-left">
+                        <span className="font-semibold uppercase text-slate-500">Query params</span>
+                        <pre className="mt-1 whitespace-pre-wrap break-words text-slate-700">{row.queryParams}</pre>
+                      </div>
+                    )}
+                    {row.bodyParams && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-left">
+                        <span className="font-semibold uppercase text-slate-500">Body</span>
+                        <pre className="mt-1 whitespace-pre-wrap break-words text-slate-700">{row.bodyParams}</pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {isSuper && (
+        <CollapsibleSection
+          title="Audit trail"
+          description="Immutable activity feed covering admin actions and key security events."
+          action={
+            <div className="flex gap-2">
+              <button type="button" onClick={() => loadAudit({ filters: auditFilters })} className="btn-secondary px-4 py-2 text-xs">Reload</button>
+              <button type="button" onClick={exportAuditCsv} className="btn-primary px-4 py-2 text-xs">Export CSV</button>
+            </div>
+          }
+          defaultOpen={false}
+        >
+          <form
+            className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]"
+            onSubmit={(e) => {
+              e.preventDefault();
+              loadAudit({ filters: auditFilters });
+            }}
+          >
+            <input
+              type="text"
+              className="form-control"
+              placeholder="Actor ID"
+              value={auditFilters.actorId}
+              onChange={(e) => setAuditFilters((prev) => ({ ...prev, actorId: e.target.value }))}
+            />
+            <input
+              type="datetime-local"
+              className="form-control"
+              value={auditFilters.start}
+              onChange={(e) => setAuditFilters((prev) => ({ ...prev, start: e.target.value }))}
+            />
+            <input
+              type="datetime-local"
+              className="form-control"
+              value={auditFilters.end}
+              onChange={(e) => setAuditFilters((prev) => ({ ...prev, end: e.target.value }))}
+            />
+            <div className="flex gap-2">
+              <button type="submit" className="btn-secondary px-4 py-2 text-xs">Apply</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuditFilters({ actorId: "", start: "", end: "" });
+                  loadAudit({ filters: { actorId: "", start: "", end: "" } });
+                }}
+                className="btn-secondary px-4 py-2 text-xs"
+              >
+                Clear
+              </button>
+            </div>
+          </form>
+
+          {auditLoading || !auditList ? (
+            <div className="p-5 text-sm text-slate-500 animate-pulse">Loading audit trail…</div>
+          ) : auditList.length === 0 ? (
+            <div className="p-5 text-sm text-slate-500">No audit events captured for this range.</div>
+          ) : (
+            <div className="space-y-3">
+              {auditList.map((item) => (
+                <article key={item.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{item.action}</p>
+                      <p className="text-xs text-slate-500">{item.entityType}{item.entityId ? ` • ${item.entityId}` : ""}</p>
+                    </div>
+                    <div className="text-right text-xs text-slate-500">
+                      <p>{formatRelativeTime(item.createdAt)}</p>
+                      <p>{item.actorRole || "system"}{item.actorId ? ` • ${item.actorId}` : ""}</p>
+                    </div>
+                  </div>
+                  {item.ip && (
+                    <p className="mt-2 text-xs text-slate-500">IP: {item.ip}</p>
+                  )}
+                  {item.notes && (
+                    <p className="mt-2 text-xs text-slate-500">{item.notes}</p>
+                  )}
+                  <div className="mt-3 grid gap-3 text-[11px] text-slate-600 sm:grid-cols-2">
+                    {item.beforeState && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <span className="font-semibold uppercase text-slate-500">Before</span>
+                        <pre className="mt-1 whitespace-pre-wrap break-words text-slate-700">{item.beforeState}</pre>
+                      </div>
+                    )}
+                    {item.afterState && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <span className="font-semibold uppercase text-slate-500">After</span>
+                        <pre className="mt-1 whitespace-pre-wrap break-words text-slate-700">{item.afterState}</pre>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </CollapsibleSection>
       )}
-    </CollapsibleSection>
+    </>
   );
 }

@@ -56,9 +56,14 @@ export default function Navbar() {
       localStorage.removeItem("token");
       localStorage.removeItem("userId");
       localStorage.removeItem("username");
+      localStorage.removeItem("fullName");
       localStorage.removeItem("profilePhoto");
       localStorage.removeItem("role");
       localStorage.removeItem("isAdmin");
+      localStorage.removeItem("state");
+      localStorage.removeItem("residenceLGA");
+      localStorage.removeItem("chatGuestName");
+      localStorage.removeItem("chatGuestToken");
       window.dispatchEvent(new Event("storage"));
     } catch {}
     if (typeof window !== "undefined") window.location.replace("/login");

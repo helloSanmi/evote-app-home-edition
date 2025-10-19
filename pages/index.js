@@ -1,37 +1,45 @@
-// frontend/pages/index.js
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { jget } from "../lib/apiBase";
 import { notifyError } from "../components/Toast";
 
-const features = [
+const benefits = [
   {
-    title: "Secure by design",
-    description: "Every ballot is encrypted end-to-end and auditable by administrators in real time.",
+    title: "Trusted results",
+    description: "Every vote is stored securely with clear records.",
   },
   {
-    title: "Live visibility",
-    description: "Track voting windows, monitor participation, and view published outcomes instantly.",
+    title: "Live status",
+    description: "See when a session opens, closes, and publishes.",
   },
   {
-    title: "Inclusive access",
-    description: "Eligibility rules adapt to national, state, or local elections so the right voters are onboarded.",
+    title: "Simple onboarding",
+    description: "Guide every voter through sign up in a few steps.",
   },
 ];
 
 const quickLinks = [
-  { href: "/vote", title: "Vote", subtitle: "Cast your ballot in live sessions" },
-  { href: "/results", title: "Results", subtitle: "Review published outcomes" },
-  { href: "/profile", title: "Profile", subtitle: "Update your personal details" },
-  { href: "/faq", title: "Help / FAQ", subtitle: "Learn how the platform works" },
+  { href: "/vote", title: "Vote", subtitle: "Place your ballot when a session is open." },
+  { href: "/results", title: "Results", subtitle: "Read the latest published outcomes." },
+  { href: "/profile", title: "Profile", subtitle: "Keep your personal details current." },
+  { href: "/faq", title: "Help", subtitle: "Learn how the platform works." },
 ];
+
+const formatDisplayName = (value) => {
+  if (!value) return "";
+  return value
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
 
 export default function Home() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [username, setUsername] = useState("");
+  const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("user");
   const [active, setActive] = useState(null);
   const [loadingActive, setLoadingActive] = useState(true);
@@ -42,6 +50,7 @@ export default function Home() {
       const token = localStorage.getItem("token");
       setLoggedIn(!!token);
       setUsername(localStorage.getItem("username") || "");
+      setFullName(localStorage.getItem("fullName") || "");
       const storedRole = (localStorage.getItem("role") || "user").toLowerCase();
       setRole(storedRole);
     };
@@ -69,7 +78,7 @@ export default function Home() {
         const current = await findActivePeriod();
         setActive(current || null);
       } catch (e) {
-        notifyError(e.message || "Failed to detect active session");
+        notifyError(e.message || "We could not load your sessions.");
         setActive(null);
       } finally {
         setLoadingActive(false);
@@ -77,134 +86,133 @@ export default function Home() {
     })();
   }, [loggedIn, role]);
 
-  const heroButtons = useMemo(() => (
-    <div className="mt-8 flex flex-wrap items-center gap-4">
-      <Link href="/register" className="btn-primary text-base">
-        Create free account
-      </Link>
-      <Link href="/login" className="btn-secondary text-base">
-        Sign in
-      </Link>
-    </div>
-  ), []);
-
   if (!mounted) return null;
-
   if (role === "admin" || role === "super-admin") {
     return null;
   }
 
+  const greetingNameRaw = fullName || username;
+  const greetingName = formatDisplayName(greetingNameRaw);
+
   if (!loggedIn) {
     return (
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-12 py-12">
-        <section className="relative overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50 px-8 py-14 text-center shadow-[0_25px_70px_-40px_rgba(15,23,42,0.4)]">
-          <div className="mx-auto max-w-3xl space-y-4">
-            <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">
-              Trusted digital ballots
-            </span>
-            <h1 className="text-4xl font-bold leading-tight text-slate-900 sm:text-5xl">
-              Secure, transparent elections for modern institutions
-            </h1>
-            <p className="text-base text-slate-600 sm:text-lg">
-              Run nationwide or hyper-local elections with live insights, audit trails, and real-time voter eligibility—all in one collaborative dashboard.
-            </p>
-            {heroButtons}
-          </div>
-          <div className="mt-12 grid gap-5 sm:grid-cols-3">
-            {features.map((feature) => (
-              <div
-                key={feature.title}
-                className="flex flex-col gap-2 rounded-2xl border border-slate-200/80 bg-white p-6 text-left shadow-sm"
-              >
-                <h3 className="text-sm font-semibold tracking-wide text-indigo-600 uppercase">
-                  {feature.title}
-                </h3>
-                <p className="text-sm text-slate-600">{feature.description}</p>
+      <div className="min-h-screen bg-slate-100">
+        <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-4 py-10 sm:px-6 lg:px-10">
+          <div className="grid gap-10 md:grid-cols-2">
+            <div className="flex flex-col justify-center text-slate-700">
+              <span className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-4 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-indigo-500 shadow-sm">
+                Digital voting
+              </span>
+              <h1 className="mt-6 text-4xl font-semibold leading-tight text-slate-900 sm:text-5xl">
+                Online voting with security and confidence.
+              </h1>
+              <p className="mt-4 text-base text-slate-600 sm:text-lg">
+                Vote and view results.
+              </p>
+              <div className="mt-8 flex flex-wrap items-center gap-4">
+                <Link href="/register" className="btn-primary text-base shadow-lg shadow-indigo-300/40 hover:shadow-indigo-400/40">
+                  Create account
+                </Link>
+                <Link href="/login" className="inline-flex items-center rounded-full border border-slate-200 bg-white px-6 py-2.5 text-base font-semibold text-slate-700 transition hover:border-indigo-400 hover:text-indigo-500">
+                  Sign in
+                </Link>
               </div>
-            ))}
+            </div>
+
+            <div className="flex items-center">
+              <div className="w-full rounded-3xl bg-white p-6 shadow-xl">
+                <h3 className="text-sm font-semibold text-slate-900">Why voters choose us</h3>
+                <ul className="mt-6 space-y-4 text-sm text-slate-600">
+                  {benefits.map((item) => (
+                    <li key={item.title} className="flex items-start gap-3">
+                      <span className="mt-1 inline-flex h-2.5 w-2.5 flex-none rounded-full bg-indigo-400" />
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-900">{item.title}</span>
+                        <span className="text-sm font-normal text-slate-600">{item.description}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
-        </section>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 py-8">
-      <section className="rounded-3xl border border-slate-200 bg-white/95 px-6 py-10 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur-sm md:px-10">
-        <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-3">
-            <p className="text-sm uppercase tracking-[0.35em] text-slate-500">
-              Welcome back
-            </p>
-            <h2 className="text-3xl font-semibold text-slate-900">
-              Hello{username ? `, ${username}` : ""} 👋
+    <div className="min-h-screen bg-slate-100">
+      <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-4 py-10 sm:px-6 lg:px-10">
+        <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="flex flex-col rounded-3xl bg-white p-8 shadow-xl">
+            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-600">
+              Dashboard
+            </span>
+            <h2 className="mt-6 text-3xl font-semibold text-slate-900 sm:text-4xl">
+              {greetingName ? `Welcome back, ${greetingName}.` : "Welcome back."}
             </h2>
-            <p className="text-sm text-slate-500 md:text-base">
-              Stay on top of your active elections, review results, and manage your profile from a single control centre.
+            <p className="mt-4 text-sm text-slate-600 sm:text-base">
+              Track live activity, review past votes, and stay ready for the next session.
             </p>
-            <div className="grid gap-3 sm:grid-cols-2">
+
+            <div className="mt-8 grid gap-4 sm:grid-cols-2">
               {quickLinks.map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex flex-col gap-1 rounded-2xl border border-slate-200/70 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  className="group flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-400 hover:shadow-md"
                 >
                   <span className="text-sm font-semibold text-slate-900">{link.title}</span>
                   <span className="text-xs text-slate-500">{link.subtitle}</span>
+                  <span className="text-sm font-semibold text-indigo-500 transition group-hover:text-indigo-400">&rarr;</span>
                 </Link>
               ))}
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md md:max-w-xs">
-            <h3 className="text-sm font-semibold text-slate-900">Active voting window</h3>
-            {loadingActive ? (
-              <p className="mt-3 text-sm text-slate-500 animate-pulse">Checking live sessions…</p>
-            ) : !active ? (
-              <p className="mt-3 text-sm text-slate-500">No session is currently open.</p>
-            ) : (
-              <div className="mt-3 space-y-2 text-sm">
-                <div className="font-semibold text-slate-900">{active.title || `Session #${active.id}`}</div>
-                <div className="text-slate-500">
-                  {new Date(active.startTime).toLocaleString()} — {new Date(active.endTime).toLocaleString()}
+
+          <div className="flex flex-col gap-6">
+            <div className="rounded-3xl bg-white p-6 shadow-xl">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-600">
+                Active session
+              </h3>
+              {loadingActive ? (
+                <p className="mt-4 text-sm text-slate-500 animate-pulse">Checking for live sessions...</p>
+              ) : !active ? (
+                <p className="mt-4 text-sm text-slate-500">No session is open right now.</p>
+              ) : (
+                <div className="mt-4 space-y-3 text-sm">
+                  <div className="text-base font-semibold text-slate-900">{active.title || `Session #${active.id}`}</div>
+                  <div className="text-xs text-slate-500">
+                    {new Date(active.startTime).toLocaleString()} to {new Date(active.endTime).toLocaleString()}
+                  </div>
+                  <Link href="/vote" className="btn-primary w-full justify-center text-base">
+                    Go to voting
+                  </Link>
                 </div>
-                <Link href="/vote" className="btn-primary w-full justify-center text-base">
-                  Go vote now
-                </Link>
-              </div>
-            )}
+              )}
+            </div>
+
+            <div className="rounded-3xl bg-white p-6 shadow-xl">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-600">Stay ready</h3>
+              <ul className="mt-4 space-y-3 text-sm text-slate-600">
+                <li className="flex items-start gap-3">
+                  <span className="mt-1 inline-flex h-2.5 w-2.5 flex-none rounded-full bg-indigo-400" />
+                  <span>Review your profile before each session begins.</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <span className="mt-1 inline-flex h-2.5 w-2.5 flex-none rounded-full bg-indigo-400" />
+                  <span>Set reminders so you never miss the closing time.</span>
+                </li>
+                <li className="flex items-start gap-3">
+                  <span className="mt-1 inline-flex h-2.5 w-2.5 flex-none rounded-full bg-indigo-400" />
+                  <span>Share the invite link with voters who are not yet registered.</span>
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
-      </section>
-
-      <section className="grid gap-5 rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_25px_70px_-50px_rgba(15,23,42,0.45)] md:grid-cols-3 md:p-10">
-        <div className="md:col-span-1 space-y-3">
-          <h3 className="text-2xl font-semibold text-slate-900">Why institutions trust us</h3>
-          <p className="text-sm text-slate-500">
-            The platform delivers full lifecycle support for administrators and voters—from registration to final audit.
-          </p>
-        </div>
-        <ul className="md:col-span-2 grid gap-4">
-          {[
-            {
-              title: "Real-time oversight",
-              detail: "Admin dashboards highlight unpublished sessions, live participation, and audit discrepancies instantly.",
-            },
-            {
-              title: "Voter confidence",
-              detail: "Eligibility checks, profile photo uploads, and secure reset flows keep identities verified without friction.",
-            },
-            {
-              title: "Scalable infrastructure",
-              detail: "Socket-powered updates and SQL-backed storage make it ready for organisations of any size.",
-            },
-          ].map((item) => (
-            <li key={item.title} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-              <h4 className="text-sm font-semibold text-slate-900">{item.title}</h4>
-              <p className="mt-1 text-xs text-slate-500">{item.detail}</p>
-            </li>
-          ))}
-        </ul>
-      </section>
+      </div>
     </div>
   );
 

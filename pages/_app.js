@@ -25,6 +25,11 @@ export default function App({ Component, pageProps }) {
         localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
         localStorage.setItem("userId", data.userId);
         localStorage.setItem("username", data.username);
+        if (data.fullName) {
+          localStorage.setItem("fullName", data.fullName);
+        } else {
+          localStorage.removeItem("fullName");
+        }
         if (data.profilePhoto) localStorage.setItem("profilePhoto", data.profilePhoto);
         window.dispatchEvent(new Event("storage"));
         reidentifySocket();

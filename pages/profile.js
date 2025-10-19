@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import NG from "../public/ng-states-lgas.json";
-import { api, jget, jput, safeJson } from "../lib/apiBase";
+import { api, jget, jpost, jput, safeJson } from "../lib/apiBase";
 import { mediaUrl } from "../lib/mediaUrl";
 import { notifyError, notifySuccess } from "../components/Toast";
 
@@ -9,6 +9,10 @@ export default function Profile() {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ state: "", residenceLGA: "", phone: "", dateOfBirth: "" });
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const pendingDeletion = Boolean(user?.deletedAt);
+  const purgeDate = user?.purgeAt ? new Date(user.purgeAt) : null;
 
   // Your JSON might be {states:[{state, lgas}]} or { "Abia": [...] }. Normalize:
   const norm = useMemo(() => {
@@ -31,6 +35,7 @@ export default function Profile() {
         if (!isMounted) return;
         setUser(me);
         if (typeof window !== "undefined") {
+          localStorage.setItem("fullName", me.fullName || me.username || "");
           localStorage.setItem("state", me.state || "");
           localStorage.setItem("residenceLGA", me.residenceLGA || "");
         }
@@ -62,6 +67,7 @@ export default function Profile() {
       const me = await jget("/api/profile/me");
       setUser(me);
       if (typeof window !== "undefined") {
+        localStorage.setItem("fullName", me.fullName || me.username || "");
         localStorage.setItem("profilePhoto", me.profilePhoto || "/avatar.png");
         localStorage.setItem("state", me.state || "");
         localStorage.setItem("residenceLGA", me.residenceLGA || "");
@@ -71,6 +77,26 @@ export default function Profile() {
       notifyError(e.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function scheduleDeletion(e) {
+    e?.preventDefault?.();
+    if (!deletePassword.trim()) {
+      notifyError("Enter your password to continue.");
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      await jpost("/api/profile/delete", { password: deletePassword.trim() });
+      notifySuccess("Account scheduled for deletion");
+      setDeletePassword("");
+      const me = await jget("/api/profile/me");
+      setUser(me);
+    } catch (err) {
+      notifyError(err.message || "Unable to schedule deletion");
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -174,6 +200,37 @@ export default function Profile() {
       <div className="bg-white rounded-2xl shadow p-6">
         <div className="font-semibold mb-2">Security</div>
         <a className="text-blue-600 hover:underline" href="/reset-password">Change / Reset password</a>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Delete account</h2>
+          <p className="mt-1 text-sm text-slate-500">Schedule permanent removal of your profile. We keep the data for 30 days so you can change your mind.</p>
+        </div>
+        {pendingDeletion ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-700">
+            <p>Your account will be purged on {purgeDate ? purgeDate.toLocaleString() : "the next removal run"}.</p>
+            <p className="mt-1">Use the restore form on the sign-in page with your username, date of birth, and password to reactivate it before that date.</p>
+          </div>
+        ) : (
+          <form className="space-y-3" onSubmit={scheduleDeletion}>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-600" htmlFor="delete-password">Confirm with password</label>
+              <input
+                id="delete-password"
+                type="password"
+                className="form-control"
+                placeholder="Current password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-slate-500">After confirmation the account enters a 30 day pending state. You can restore it using your username, date of birth, and password.</p>
+            <button type="submit" disabled={deleteBusy} className="btn-primary disabled:opacity-60">
+              {deleteBusy ? "Scheduling…" : "Schedule deletion"}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

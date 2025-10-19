@@ -4,6 +4,10 @@ const router = express.Router();
 const { q } = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
+const STATUS_ONLINE = "online";
+const STATUS_OFFLINE = "offline";
+const VALID_STATUS = new Set([STATUS_ONLINE, STATUS_OFFLINE]);
+
 function firstName(value) {
   if (!value) return "";
   const raw = String(value).trim();
@@ -27,6 +31,29 @@ async function getOrCreateSessionForUser(user) {
   );
   const [[fresh]] = await q(`SELECT * FROM ChatSession WHERE id=? LIMIT 1`, [result.insertId]);
   return fresh;
+}
+
+async function getAdminChatStatus(userId) {
+  const [[row]] = await q(
+    `SELECT chatStatus FROM Users WHERE id=? LIMIT 1`,
+    [userId]
+  );
+  return row?.chatStatus || STATUS_OFFLINE;
+}
+
+async function setAdminChatStatus(userId, status) {
+  await q(`UPDATE Users SET chatStatus=? WHERE id=?`, [status, userId]);
+  return status;
+}
+
+async function getOnlineAdminCount() {
+  const [[row]] = await q(
+    `SELECT COUNT(*) AS onlineCount
+     FROM Users
+     WHERE (role IN ('admin','super-admin') OR isAdmin=1)
+       AND chatStatus='online'`
+  );
+  return Number(row?.onlineCount || 0);
 }
 
 function rowToSession(row, { guestToken } = {}) {
@@ -124,6 +151,41 @@ function shouldEscalateToHuman(message) {
 function generateGuestToken() {
   return crypto.randomBytes(18).toString("hex");
 }
+
+router.get("/admin/status", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
+  try {
+    const status = await getAdminChatStatus(req.user.id);
+    res.json({ status });
+  } catch (err) {
+    console.error("chat/admin/status:get", err);
+    res.status(500).json({ error: "SERVER", message: "Could not load chat status" });
+  }
+});
+
+router.post("/admin/status", requireAuth, requireRole(["admin", "super-admin"]), async (req, res) => {
+  try {
+    const input = String(req.body?.status || "").toLowerCase();
+    if (!VALID_STATUS.has(input)) {
+      return res.status(400).json({ error: "INVALID_STATUS", message: "Status must be online or offline" });
+    }
+    const status = await setAdminChatStatus(req.user.id, input);
+    req.app.get("io")?.emit("chat:availability-change", { adminId: req.user.id, status });
+    res.json({ status });
+  } catch (err) {
+    console.error("chat/admin/status:post", err);
+    res.status(500).json({ error: "SERVER", message: "Could not update chat status" });
+  }
+});
+
+router.get("/availability", async (_req, res) => {
+  try {
+    const onlineAdmins = await getOnlineAdminCount();
+    res.json({ onlineAdmins });
+  } catch (err) {
+    console.error("chat/availability:get", err);
+    res.status(500).json({ error: "SERVER", message: "Could not determine availability" });
+  }
+});
 
 async function findGuestSessionByToken(token) {
   if (!token) return null;

@@ -3,8 +3,11 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const router = express.Router();
+const bcrypt = require("bcryptjs");
 const { q } = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { markAccountForDeletion } = require("../utils/retention");
+const { recordAuditEvent } = require("../utils/audit");
 
 // storage: /uploads/profile
 const disk = multer.diskStorage({
@@ -32,7 +35,7 @@ const upload = multer({
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const [[u]] = await q(
-      `SELECT id, fullName, username, email, state, residenceLGA, dateOfBirth, phone, nationality, profilePhoto, createdAt
+      `SELECT id, fullName, username, email, state, residenceLGA, dateOfBirth, phone, nationality, profilePhoto, createdAt, deletedAt, purgeAt
        FROM Users WHERE id=?`,
       [req.user.id]
     );
@@ -71,6 +74,42 @@ router.post("/photo", requireAuth, upload.single("file"), async (req, res) => {
   } catch (e) {
     console.error("profile/photo:", e);
     res.status(500).json({ error: "SERVER", message: "Upload failed" });
+  }
+});
+
+router.post("/delete", requireAuth, async (req, res) => {
+  try {
+    const { password } = req.body || {};
+    if (!password || typeof password !== "string") {
+      return res.status(400).json({ error: "INVALID_PASSWORD", message: "Password is required" });
+    }
+    const [[user]] = await q(`SELECT id, password, eligibilityStatus FROM Users WHERE id=?`, [req.user.id]);
+    if (!user) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
+    }
+    const ok = await bcrypt.compare(password, user.password || "");
+    if (!ok) {
+      return res.status(403).json({ error: "INVALID_PASSWORD", message: "Incorrect password" });
+    }
+    const { purgeAt } = await markAccountForDeletion({
+      userId: req.user.id,
+      actorRole: (req.user?.role || "user").toLowerCase(),
+      ip: req.ip || null,
+      graceDays: 30,
+    });
+    await q(`UPDATE Users SET eligibilityStatus='disabled' WHERE id=?`, [req.user.id]);
+    await recordAuditEvent({
+      actorId: req.user.id,
+      actorRole: (req.user?.role || "user").toLowerCase(),
+      action: "user.delete-confirmed",
+      entityType: "user",
+      entityId: String(req.user.id),
+      notes: "User initiated account removal",
+    });
+    res.json({ success: true, purgeAt });
+  } catch (err) {
+    console.error("profile/delete:", err);
+    res.status(500).json({ error: "SERVER", message: "Failed to schedule deletion" });
   }
 });
 

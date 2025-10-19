@@ -205,7 +205,7 @@ export default function ChatHistory() {
                       : "Assistant conversation"}
                   </h3>
                 <p className="text-xs text-slate-500">
-                  Started {selectedMeta?.createdAt ? new Date(selectedMeta.createdAt).toLocaleString() : "—"}
+                  Started {selectedMeta?.createdAt ? new Date(selectedMeta.createdAt).toLocaleString() : "N/A"}
                 </p>
                 {isAdmin && selectedMeta?.userDisplayName && (
                   <p className="text-xs text-slate-400">Full name: {selectedMeta.userDisplayName}</p>

@@ -15,9 +15,19 @@ CREATE TABLE IF NOT EXISTS Users (
   role VARCHAR(30) NOT NULL DEFAULT 'user',
   eligibilityStatus VARCHAR(20) NOT NULL DEFAULT 'pending',
   profilePhoto VARCHAR(500) NULL,
+  lastLoginAt DATETIME NULL,
+  deletedAt DATETIME NULL,
+  purgeAt DATETIME NULL,
+  restoreToken VARCHAR(128) NULL,
   hasVoted TINYINT(1) NOT NULL DEFAULT 0,
   isAdmin TINYINT(1) NOT NULL DEFAULT 0,
-  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  chatStatus VARCHAR(10) NOT NULL DEFAULT 'offline',
+  googleId VARCHAR(64) NULL UNIQUE,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_users_role (role),
+  KEY idx_users_deleted (deletedAt),
+  KEY idx_users_purge (purgeAt),
+  KEY idx_users_last_login (lastLoginAt)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS VotingPeriod (
@@ -84,6 +94,10 @@ CREATE TABLE IF NOT EXISTS RequestLogs (
   path VARCHAR(255) NOT NULL,
   userId INT NULL,
   ip VARCHAR(64) NOT NULL,
+  statusCode INT NULL,
+  durationMs INT NULL,
+  queryParams TEXT NULL,
+  bodyParams TEXT NULL,
   country VARCHAR(2) NULL,
   city VARCHAR(100) NULL,
   userAgent VARCHAR(255) NULL,
@@ -91,7 +105,8 @@ CREATE TABLE IF NOT EXISTS RequestLogs (
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_requestlogs_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE SET NULL,
   KEY idx_requestlogs_created (createdAt),
-  KEY idx_requestlogs_user (userId)
+  KEY idx_requestlogs_user (userId),
+  KEY idx_requestlogs_status (statusCode)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ChatSession (
@@ -125,4 +140,22 @@ CREATE TABLE IF NOT EXISTS ChatGuestToken (
   token VARCHAR(200) NOT NULL UNIQUE,
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_chatguesttoken_session FOREIGN KEY (sessionId) REFERENCES ChatSession(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS AuditLog (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  actorId INT NULL,
+  actorRole VARCHAR(30) NULL,
+  action VARCHAR(120) NOT NULL,
+  entityType VARCHAR(60) NOT NULL,
+  entityId VARCHAR(120) NULL,
+  beforeState JSON NULL,
+  afterState JSON NULL,
+  ip VARCHAR(64) NULL,
+  notes VARCHAR(500) NULL,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_auditlog_actor FOREIGN KEY (actorId) REFERENCES Users(id) ON DELETE SET NULL,
+  KEY idx_auditlog_created (createdAt),
+  KEY idx_auditlog_actor (actorId),
+  KEY idx_auditlog_entity (entityType, entityId)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

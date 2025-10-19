@@ -187,7 +187,7 @@ export default function Results() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h1 className="text-xl font-semibold text-slate-900">{selectedSession.title || `Session #${selectedSession.id}`}</h1>
-                  <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} — {new Date(selectedSession.endTime).toLocaleString()}</p>
+                  <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} to {new Date(selectedSession.endTime).toLocaleString()}</p>
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                   <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase">Scope: {selectedSession.scope}</span>
@@ -247,8 +247,8 @@ export default function Results() {
                                 </div>
                               </div>
                             </td>
-                            <td className="px-4 py-3 text-xs text-slate-600">{candidate.state || "—"}</td>
-                            <td className="px-4 py-3 text-xs text-slate-600">{candidate.lga || "—"}</td>
+                            <td className="px-4 py-3 text-xs text-slate-600">{candidate.state || "N/A"}</td>
+                            <td className="px-4 py-3 text-xs text-slate-600">{candidate.lga || "N/A"}</td>
                             <td className="px-4 py-3 text-right text-sm font-semibold text-slate-900">{candidate.votes.toLocaleString()}</td>
                           </tr>
                         );

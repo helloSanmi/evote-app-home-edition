@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost } from "../lib/apiBase";
 import { getSocket } from "../lib/socket";
 import { notifyError, notifyInfo, notifySuccess } from "./Toast";
@@ -40,6 +40,9 @@ const adminStatuses = {
   bot: { label: "Assistant", tone: "bg-sky-100 text-sky-700" },
 };
 
+const STATUS_ONLINE = "online";
+const STATUS_OFFLINE = "offline";
+
 const assistantIntroMessage = {
   id: "assistant-intro",
   senderType: "bot",
@@ -62,6 +65,10 @@ export default function AssistantChat() {
   const [guestToken, setGuestToken] = useState(getStoredGuestToken());
   const [guestNameInput, setGuestNameInput] = useState(getStoredGuestName());
   const [guestError, setGuestError] = useState("");
+  const [adminStatus, setAdminStatus] = useState(STATUS_OFFLINE);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [onlineAdmins, setOnlineAdmins] = useState(null);
+  const [prefillDismissed, setPrefillDismissed] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
 
@@ -73,6 +80,28 @@ export default function AssistantChat() {
     if (!activeSessionId) return null;
     return sessions.find((item) => item.id === activeSessionId) || null;
   }, [isAdmin, session, sessions, activeSessionId]);
+
+  const fetchAdminStatus = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const data = await apiGet("/api/chat/admin/status");
+      const nextStatus = String(data?.status || "").toLowerCase();
+      setAdminStatus(nextStatus === STATUS_ONLINE ? STATUS_ONLINE : STATUS_OFFLINE);
+    } catch {
+      setAdminStatus(STATUS_OFFLINE);
+    }
+  }, [isAdmin]);
+
+  const fetchAvailability = useCallback(async () => {
+    if (isAdmin) return;
+    try {
+      const data = await apiGet("/api/chat/availability");
+      const count = Number.isFinite(Number(data?.onlineAdmins)) ? Number(data.onlineAdmins) : 0;
+      setOnlineAdmins(count);
+    } catch {
+      setOnlineAdmins(0);
+    }
+  }, [isAdmin]);
 
   useEffect(() => {
     const handleStorage = () => {
@@ -112,6 +141,14 @@ export default function AssistantChat() {
   }, [guestName]);
 
   useEffect(() => {
+    if (!isAdmin) {
+      setAdminStatus(STATUS_OFFLINE);
+      return;
+    }
+    fetchAdminStatus();
+  }, [isAdmin, fetchAdminStatus]);
+
+  useEffect(() => {
     if (!open) return;
     const socket = getSocket();
     const handleMessage = (payload) => {
@@ -135,15 +172,24 @@ export default function AssistantChat() {
         loadUserConversation({ notify: false });
       }
     };
+    const handleAvailabilityChange = () => {
+      if (isAdmin) {
+        fetchAdminStatus();
+      } else {
+        fetchAvailability();
+      }
+    };
     socket.on("chat:message", handleMessage);
     socket.on("chat:sessions:update", handleSessionUpdate);
     socket.on("chat:session:update", handleSessionUpdate);
+    socket.on("chat:availability-change", handleAvailabilityChange);
     return () => {
       socket.off("chat:message", handleMessage);
       socket.off("chat:sessions:update", handleSessionUpdate);
       socket.off("chat:session:update", handleSessionUpdate);
+      socket.off("chat:availability-change", handleAvailabilityChange);
     };
-  }, [open, isAdmin, session, activeSessionId]);
+  }, [open, isAdmin, session, activeSessionId, fetchAdminStatus, fetchAvailability]);
 
   useEffect(() => {
     if (!open) return;
@@ -153,6 +199,24 @@ export default function AssistantChat() {
     }
     scrollToBottom();
   }, [selectedSession, open]);
+
+  useEffect(() => {
+    if (isAdmin || !open) {
+      setOnlineAdmins(null);
+      return () => {};
+    }
+    let ignore = false;
+    const run = async () => {
+      if (ignore) return;
+      await fetchAvailability();
+    };
+    run();
+    const interval = setInterval(run, 30000);
+    return () => {
+      ignore = true;
+      clearInterval(interval);
+    };
+  }, [open, isAdmin, fetchAvailability]);
 
   useEffect(() => {
     if (open && inputRef.current) inputRef.current.focus();
@@ -223,7 +287,7 @@ export default function AssistantChat() {
       setSession(data.session || null);
       setMessages(data.messages || []);
       if (notify && data.session?.status === "pending") {
-        notifyInfo("Hang tight—an admin will join shortly.");
+        notifyInfo("Hang tight, an admin will join shortly.");
       }
       scrollToBottom();
       if (create) {
@@ -247,7 +311,7 @@ export default function AssistantChat() {
         persistGuestDetails(data.session.userDisplayName, guestToken);
       }
       if (notify && data.session?.status === "pending") {
-        notifyInfo("Hang tight—an admin will join shortly.");
+        notifyInfo("Hang tight, an admin will join shortly.");
       }
     } catch (err) {
       const message = err.message || "Unable to load chat";
@@ -290,7 +354,7 @@ export default function AssistantChat() {
       setSession(data.session || null);
       setMessages(Array.isArray(data.messages) ? data.messages : []);
       if (data.session?.status === "pending") {
-        notifyInfo("Hang tight—an admin will join shortly.");
+        notifyInfo("Hang tight, an admin will join shortly.");
       }
       scrollToBottom();
     } catch (err) {
@@ -345,6 +409,23 @@ export default function AssistantChat() {
     }
   }
 
+  async function toggleAdminStatus() {
+    if (!isAdmin) return;
+    const nextStatus = adminStatus === STATUS_ONLINE ? STATUS_OFFLINE : STATUS_ONLINE;
+    setStatusBusy(true);
+    try {
+      const data = await apiPost("/api/chat/admin/status", { status: nextStatus });
+      const applied = String(data?.status || nextStatus).toLowerCase();
+      const normalised = applied === STATUS_ONLINE ? STATUS_ONLINE : STATUS_OFFLINE;
+      setAdminStatus(normalised);
+      notifySuccess(normalised === STATUS_ONLINE ? "You are now available for chat." : "You are now offline for chat.");
+    } catch (err) {
+      notifyError(err.message || "Unable to update chat status");
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
   async function loadAdminSessionMessages(id, showFeedback = true) {
     if (!id) return;
     try {
@@ -385,6 +466,7 @@ export default function AssistantChat() {
       return;
     }
     setInput("");
+    if (!isAdmin) setPrefillDismissed(true);
     try {
       if (isAdmin) {
         await apiPost(`/api/chat/sessions/${selectedSession.id}/message`, { message: value });
@@ -410,12 +492,34 @@ export default function AssistantChat() {
 
   const renderingMessages = useMemo(() => messages || [], [messages]);
 
+  useEffect(() => {
+    if (isAdmin) return;
+    if (renderingMessages.some((msg) => msg.senderType === "user" || msg.senderType === "guest")) {
+      setPrefillDismissed(true);
+    }
+  }, [renderingMessages, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin && !selectedSession) {
+      setPrefillDismissed(false);
+    }
+  }, [selectedSession, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin && !open) {
+      setPrefillDismissed(false);
+    }
+  }, [open, isAdmin]);
+
   const isConversationClosed = selectedSession?.status === "closed";
   const hasAdminEngaged = Boolean(
     selectedSession?.assignedAdminName || selectedSession?.assignedAdminDisplayName || renderingMessages.some((msg) => msg.senderType === "admin")
   );
+  const hasUserMessage = renderingMessages.some((msg) => msg.senderType === "user" || msg.senderType === "guest");
   const suggestionList =
-    !isAdmin && selectedSession && !isConversationClosed && !hasAdminEngaged ? userPlaceholders : [];
+    !isAdmin && selectedSession && !isConversationClosed && !hasAdminEngaged && !hasUserMessage && !prefillDismissed
+      ? userPlaceholders
+      : [];
   const canSendMessage = !!selectedSession && !isConversationClosed;
   const shouldShowAssistantIntro = !isAdmin && selectedSession && renderingMessages.length === 0;
 
@@ -440,10 +544,26 @@ export default function AssistantChat() {
     return `Chatting with ${adminName}`;
   };
 
+  const adminIsOnline = adminStatus === STATUS_ONLINE;
+  const availabilityLabel = isAdmin
+    ? (adminIsOnline ? "You are online" : "You are offline")
+    : onlineAdmins === null
+      ? "Checking availability"
+      : onlineAdmins > 0
+        ? `${onlineAdmins} admin${onlineAdmins > 1 ? "s" : ""} online`
+        : "No admins online";
+  const availabilityDot = isAdmin
+    ? (adminIsOnline ? "bg-emerald-400" : "bg-amber-400")
+    : onlineAdmins === null
+      ? "bg-slate-300"
+      : onlineAdmins > 0
+        ? "bg-emerald-400"
+        : "bg-rose-400";
+
   return (
     <div className="fixed bottom-5 right-5 z-[120] flex flex-col items-end gap-3">
       {open && (
-        <div className="flex w-[min(100vw-1.5rem,320px)] max-h-[75vh] min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_40px_-18px_rgba(79,70,229,0.55)] ring-1 ring-indigo-100/60 sm:w-[360px] sm:max-h-[70vh] lg:w-[380px] lg:max-h-[65vh]">
+        <div className="flex w-[calc(100vw-1.5rem)] max-h-[75vh] min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_40px_-18px_rgba(79,70,229,0.55)] ring-1 ring-indigo-100/60 sm:w-[360px] sm:max-h-[70vh] lg:w-[380px] lg:max-h-[65vh]">
           <div className="flex items-center justify-between bg-gradient-to-r from-indigo-500 via-indigo-600 to-indigo-500 px-4 py-3 text-white">
             <div className="flex items-center gap-3">
               <span className="flex h-8 w-8 items-center justify-center rounded-2xl bg-white/20 text-[13px] shadow-sm">
@@ -452,19 +572,31 @@ export default function AssistantChat() {
               <div className="flex flex-col leading-tight">
                 <span className="text-[13px] font-semibold">{isAdmin ? "Support Desk" : "Assistant"}</span>
                 <span className="flex items-center gap-1 text-[10px] font-medium text-white/80">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  Online
+                  <span className={`h-1.5 w-1.5 rounded-full ${availabilityDot}`} />
+                  {availabilityLabel}
                 </span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-              aria-label="Close chat"
-            >
-              ×
-            </button>
+            <div className="flex items-center gap-2">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={toggleAdminStatus}
+                  disabled={statusBusy}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/40 bg-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/90 transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:opacity-60"
+                >
+                  {statusBusy ? "Updating…" : adminIsOnline ? "Go offline" : "Go online"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                aria-label="Close chat"
+              >
+                ×
+              </button>
+            </div>
           </div>
 
           {isAdmin ? (
@@ -504,6 +636,9 @@ export default function AssistantChat() {
           ) : (
             <div className="shrink-0 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
               <p className="leading-snug">I’ll answer straight away and invite a teammate if you ask for a human.</p>
+              <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Support status: <span className="normal-case text-slate-700">{availabilityLabel}</span>
+              </p>
               <div className="mt-2 space-y-2 text-[10px] leading-snug">
                 {loading && !session ? (
                   <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-2 text-center">Loading conversation…</div>
@@ -670,7 +805,7 @@ export default function AssistantChat() {
                   className={`${ghostActionClass} border-rose-200 text-rose-600 hover:border-rose-300 hover:text-rose-500`}
                   aria-label="End chat"
                 >
-                  End<span className="hidden sm:inline"> chat</span>
+                  End chat
                 </button>
               )}
               <button

@@ -151,8 +151,17 @@ export default function Vote() {
   const selectedStatus = selectedSession ? statusByPeriod[selectedSession.id] || {} : {};
   const youVotedId = selectedStatus?.youVoted?.id;
   const hasVoted = !!selectedStatus?.hasVoted;
-  const now = Date.now();
-  const isSessionActive = (session) => now >= new Date(session.startTime).getTime() && now <= new Date(session.endTime).getTime();
+  const [clock, setClock] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, []);
+  const isSessionActive = (session, referenceTime = clock) => {
+    if (!session) return false;
+    const start = new Date(session.startTime).getTime();
+    const end = new Date(session.endTime).getTime();
+    return referenceTime >= start && referenceTime <= end;
+  };
   const sortedSessions = useMemo(() => {
     if (!Array.isArray(sessions)) return [];
     return [...sessions].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
@@ -178,7 +187,7 @@ export default function Vote() {
         <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-10 py-12 text-center text-slate-600 shadow-sm">
           <h2 className="text-2xl font-semibold text-slate-900">No eligible sessions yet</h2>
           <p className="mt-2 text-sm text-slate-500">
-            Stay tuned—once a voting period opens for your region, it will appear here automatically.
+            Stay tuned. Once a voting period opens for your region, it will appear here automatically.
           </p>
         </div>
       </div>
@@ -202,13 +211,14 @@ export default function Vote() {
             <aside className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
               <h2 className="px-2 text-sm font-semibold text-slate-700">Upcoming ballots</h2>
               <div className="space-y-1">
-                {sortedSessions.map((session) => {
+                  {sortedSessions.map((session) => {
                   const active = selectedSessionId === session.id;
-                  const isActiveNow = isSessionActive(session);
+                  const startTime = new Date(session.startTime).getTime();
+                  const isActiveNow = isSessionActive(session, clock);
                   const statusLabel = isActiveNow
                     ? "Live"
-                    : new Date(session.startTime).getTime() > Date.now()
-                      ? "Upcoming"
+                    : clock < startTime
+                      ? "Starting soon"
                       : "Closed";
                   const statusTone = isActiveNow
                     ? "bg-emerald-100 text-emerald-700"
@@ -242,7 +252,7 @@ export default function Vote() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h2 className="text-lg font-semibold text-slate-900">{selectedSession.title || `Session #${selectedSession.id}`}</h2>
-                      <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} — {new Date(selectedSession.endTime).toLocaleString()}</p>
+                      <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} to {new Date(selectedSession.endTime).toLocaleString()}</p>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-500">
                       <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase">Scope: {selectedSession.scope}</span>
@@ -265,7 +275,9 @@ export default function Vote() {
                     ) : (
                       selectedCandidates.map((candidate) => {
                         const isChoice = youVotedId === candidate.id;
-                        const disabledChoice = busy || hasVoted || !isSessionActive(selectedSession);
+                        const sessionActive = isSessionActive(selectedSession, clock);
+                        const sessionNotStarted = selectedSession && clock < new Date(selectedSession.startTime).getTime();
+                        const disabledChoice = busy || hasVoted || !sessionActive;
                         return (
                           <button
                             key={candidate.id}
@@ -288,7 +300,15 @@ export default function Vote() {
                               </div>
                             </div>
                             <div className="text-xs font-semibold text-slate-500">
-                              {isChoice ? "Your selection" : isSessionActive(selectedSession) ? "Tap to vote" : hasVoted ? "Vote recorded" : "Voting closed"}
+                              {isChoice
+                                ? "Your selection"
+                                : sessionActive
+                                  ? "Tap to vote"
+                                  : hasVoted
+                                    ? "Vote recorded"
+                                    : sessionNotStarted
+                                      ? "Starting soon"
+                                      : "Voting closed"}
                             </div>
                           </button>
                         );
@@ -314,4 +334,3 @@ export default function Vote() {
     </>
   );
 }
-

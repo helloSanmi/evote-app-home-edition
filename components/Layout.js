@@ -1,6 +1,7 @@
 // frontend/components/Layout.js
 import Navbar from "./Navbar";
 import CookieBanner from "./CookieBanner";
+import InactivityGuard from "./InactivityGuard";
 import dynamic from "next/dynamic";
 
 const AssistantChat = dynamic(() => import("./AssistantChat"), { ssr: false });
@@ -31,6 +32,7 @@ export default function Layout({ children }) {
       </footer>
       <CookieBanner />
       <AssistantChat />
+      <InactivityGuard />
     </div>
   );
 }

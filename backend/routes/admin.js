@@ -5,6 +5,9 @@ const multer = require("multer");
 const bcrypt = require("bcryptjs");
 const { q } = require("../db");
 const { requireAuth, requireAdmin, requireRole } = require("../middleware/auth");
+const { recordAuditEvent } = require("../utils/audit");
+const { hardDeleteUser } = require("../utils/retention");
+const { buildMetricsSnapshot } = require("../utils/telemetry");
 
 // ---------- candidate image upload ----------
 const upCand = multer.diskStorage({
@@ -149,6 +152,40 @@ router.get("/candidates", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+router.post("/periods/:id/reschedule", requireAuth, requireRole(["super-admin"]), async (req, res) => {
+  try {
+    const id = Number(req.params.id || 0);
+    if (!id) return res.status(400).json({ error: "MISSING_ID" });
+    const { startTime, endTime } = req.body || {};
+    if (!startTime || !endTime) {
+      return res.status(400).json({ error: "MISSING_FIELDS", message: "Start and end times are required" });
+    }
+    const newStart = new Date(startTime);
+    const newEnd = new Date(endTime);
+    if (Number.isNaN(newStart.getTime()) || Number.isNaN(newEnd.getTime())) {
+      return res.status(400).json({ error: "INVALID_DATE", message: "Provide valid start and end times" });
+    }
+    if (newEnd.getTime() <= newStart.getTime()) {
+      return res.status(400).json({ error: "INVALID_RANGE", message: "End time must be after start time" });
+    }
+
+    const [[period]] = await q(`SELECT startTime FROM VotingPeriod WHERE id=?`, [id]);
+    if (!period) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
+    if (new Date(period.startTime).getTime() <= Date.now()) {
+      return res.status(409).json({ error: "ALREADY_STARTED", message: "This session has already started and cannot be rescheduled" });
+    }
+    if (newStart.getTime() <= Date.now()) {
+      return res.status(400).json({ error: "PAST_START", message: "New start time must be in the future" });
+    }
+
+    await q(`UPDATE VotingPeriod SET startTime=?, endTime=? WHERE id=?`, [newStart, newEnd, id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("admin/periods/reschedule:", e);
+    res.status(500).json({ error: "SERVER", message: "Could not reschedule session" });
+  }
+});
+
 // end early (latest active/unpublished)
 router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -262,7 +299,7 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
     }
     const normalizedRole = (role || "user").toLowerCase() === "admin" ? "admin" : "user";
     const hash = await bcrypt.hash(password.trim(), 10);
-    await q(
+    const [result] = await q(
       `INSERT INTO Users (fullName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted, role, isAdmin)
        VALUES (?,?,?,?,?,?,?,?,NULL,'active',0,?,?)`,
       [
@@ -277,7 +314,27 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
         normalizedRole === "admin" ? 1 : 0,
       ]
     );
-    res.json({ success: true });
+    const insertId = result?.insertId;
+    if (insertId) {
+      const [[created]] = await q(
+        `SELECT id, fullName, username, email, role FROM Users WHERE id=?`,
+        [insertId]
+      );
+      await recordAuditEvent({
+        actorId: req.user?.id || null,
+        actorRole: (req.user?.role || "").toLowerCase() || null,
+        action: "user.created",
+        entityType: "user",
+        entityId: String(insertId),
+        after: {
+          fullName: created?.fullName,
+          username: created?.username,
+          email: created?.email,
+          role: created?.role,
+        },
+      });
+    }
+    res.json({ success: true, id: insertId });
   } catch (e) {
     if (e?.code === "ER_DUP_ENTRY") {
       return res.status(409).json({ error: "DUPLICATE", message: "Username or email already exists" });
@@ -289,7 +346,12 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
 
 router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const [rows] = await q(`SELECT id, fullName, username, email, state, residenceLGA, phone, nationality, dateOfBirth, role, eligibilityStatus, isAdmin, createdAt FROM Users ORDER BY id DESC`);
+    const [rows] = await q(`
+      SELECT id, fullName, username, email, state, residenceLGA, phone, nationality, dateOfBirth,
+             role, eligibilityStatus, isAdmin, createdAt, profilePhoto, lastLoginAt, deletedAt, purgeAt
+      FROM Users
+      ORDER BY id DESC
+      LIMIT 1000`);
     res.json(rows || []);
   } catch (e) {
     console.error("admin/users:", e);
@@ -326,13 +388,21 @@ router.post("/users/:id/disable", requireAuth, requireAdmin, async (req, res) =>
   try {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
-    const actorRole = (req.user?.role || "").toLowerCase();
-    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    const [[target]] = await q(`SELECT id, role, username, eligibilityStatus FROM Users WHERE id=?`, [uid]);
     if (!target) return res.status(404).json({ error: "NOT_FOUND" });
-    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
-      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    if (target.role?.toLowerCase() === "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Super admin accounts cannot be disabled" });
     }
     await q(`UPDATE Users SET eligibilityStatus='disabled' WHERE id=?`, [uid]);
+    await recordAuditEvent({
+      actorId: req.user?.id || null,
+      actorRole: (req.user?.role || "").toLowerCase() || null,
+      action: "user.disabled",
+      entityType: "user",
+      entityId: String(uid),
+      before: { eligibilityStatus: target.eligibilityStatus },
+      after: { eligibilityStatus: "disabled" },
+    });
     res.json({ success: true });
   } catch (e) {
     console.error("admin/users/disable:", e);
@@ -344,13 +414,21 @@ router.post("/users/:id/enable", requireAuth, requireAdmin, async (req, res) => 
   try {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
-    const actorRole = (req.user?.role || "").toLowerCase();
-    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    const [[target]] = await q(`SELECT id, role, username, eligibilityStatus FROM Users WHERE id=?`, [uid]);
     if (!target) return res.status(404).json({ error: "NOT_FOUND" });
-    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
-      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    if (target.role?.toLowerCase() === "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Super admin accounts cannot be enabled or disabled" });
     }
     await q(`UPDATE Users SET eligibilityStatus='active' WHERE id=?`, [uid]);
+    await recordAuditEvent({
+      actorId: req.user?.id || null,
+      actorRole: (req.user?.role || "").toLowerCase() || null,
+      action: "user.enabled",
+      entityType: "user",
+      entityId: String(uid),
+      before: { eligibilityStatus: target.eligibilityStatus },
+      after: { eligibilityStatus: "active" },
+    });
     res.json({ success: true });
   } catch (e) {
     console.error("admin/users/enable:", e);
@@ -362,16 +440,32 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const uid = Number(req.params.id || 0);
     if (!uid) return res.status(400).json({ error: "MISSING_ID" });
-    const actorRole = (req.user?.role || "").toLowerCase();
-    const [[target]] = await q(`SELECT role FROM Users WHERE id=?`, [uid]);
+    const [[target]] = await q(
+      `SELECT id, username, email, phone, role, eligibilityStatus, profilePhoto
+       FROM Users WHERE id=?`,
+      [uid]
+    );
     if (!target) return res.status(404).json({ error: "NOT_FOUND" });
-    if (target.role?.toLowerCase() === "super-admin" && actorRole !== "super-admin") {
-      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
+    const actorRole = (req.user?.role || "").toLowerCase();
+    const targetRole = (target.role || "").toLowerCase();
+    if (targetRole === "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Super admin accounts cannot be deleted" });
     }
-    await q(`DELETE FROM Users WHERE id=?`, [uid]);
-    const [[row]] = await q(`SELECT IFNULL(MAX(id),0) AS maxId FROM Users`);
-    const maxId = Number.isFinite(Number(row?.maxId)) ? Number(row.maxId) : 0;
-    await q(`ALTER TABLE Users AUTO_INCREMENT=?`, [maxId + 1]);
+    if (targetRole === "admin" && actorRole !== "super-admin") {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can delete admin accounts" });
+    }
+
+    await recordAuditEvent({
+      actorId: req.user?.id || null,
+      actorRole: actorRole || null,
+      action: "user.delete-requested",
+      entityType: "user",
+      entityId: String(uid),
+      before: { eligibilityStatus: target.eligibilityStatus, role: target.role },
+      notes: "Administrative deletion requested",
+    });
+
+    await hardDeleteUser(target, { reason: "admin" });
     res.json({ success: true });
   } catch (e) {
     console.error("admin/users/delete:", e);
@@ -395,6 +489,14 @@ router.post("/users/:id/reset-password", requireAuth, requireRole(["super-admin"
     }
     const hash = await bcrypt.hash(password.trim(), 10);
     await q(`UPDATE Users SET password=? WHERE id=?`, [hash, uid]);
+    await recordAuditEvent({
+      actorId: req.user?.id || null,
+      actorRole: (req.user?.role || "").toLowerCase() || null,
+      action: "user.password.reset",
+      entityType: "user",
+      entityId: String(uid),
+      notes: "Password reset by admin",
+    });
     res.json({ success: true });
   } catch (e) {
     console.error("admin/users/reset-password:", e);
@@ -419,6 +521,15 @@ router.post("/users/:id/role", requireAuth, requireRole(["super-admin"]), async 
     const isAdminFlag = normalized === "admin" ? 1 : 0;
     await q(`UPDATE Users SET role=?, isAdmin=? WHERE id=?`, [normalized, isAdminFlag, uid]);
     req.app.get("io")?.to(`user:${uid}`).emit("roleUpdated", { role: normalized });
+    await recordAuditEvent({
+      actorId: req.user?.id || null,
+      actorRole: (req.user?.role || "").toLowerCase() || null,
+      action: "user.role.changed",
+      entityType: "user",
+      entityId: String(uid),
+      before: { role: target.role },
+      after: { role: normalized },
+    });
     res.json({ success: true, role: normalized });
   } catch (e) {
     console.error("admin/users/role:", e);
@@ -427,9 +538,18 @@ router.post("/users/:id/role", requireAuth, requireRole(["super-admin"]), async 
 });
 
 // logs
-router.get("/logs", requireAuth, requireAdmin, async (_req, res) => {
+const LOG_COLUMNS = "id,method,path,userId,ip,statusCode,durationMs,queryParams,bodyParams,country,city,userAgent,referer,createdAt";
+const LOG_LIMIT = 100;
+
+const csvEscape = (value) => {
+  if (value === null || value === undefined) return '""';
+  const str = String(value);
+  return `"${str.replace(/"/g, '""')}"`;
+};
+
+router.get("/logs", requireAuth, requireRole(["super-admin"]), async (_req, res) => {
   try {
-    const [rows] = await q(`SELECT id,method,path,userId,ip,userAgent,referer,country,city,createdAt FROM RequestLogs ORDER BY id DESC LIMIT 500`);
+    const [rows] = await q(`SELECT ${LOG_COLUMNS} FROM RequestLogs ORDER BY id DESC LIMIT ${LOG_LIMIT}`);
     res.json(rows || []);
   } catch (e) {
     console.error("admin/logs:", e);
@@ -437,20 +557,135 @@ router.get("/logs", requireAuth, requireAdmin, async (_req, res) => {
   }
 });
 
-router.get("/logs/export", requireAuth, requireAdmin, async (_req, res) => {
+router.get("/logs/export", requireAuth, requireRole(["super-admin"]), async (_req, res) => {
   try {
-    const [rows] = await q(`SELECT id,method,path,userId,ip,userAgent,referer,country,city,createdAt FROM RequestLogs ORDER BY id DESC`);
-    const header = "id,method,path,userId,ip,userAgent,referer,country,city,createdAt\n";
-    const csv = header + rows.map(r => [
-      r.id, r.method, JSON.stringify(r.path), r.userId ?? "",
-      r.ip, JSON.stringify(r.userAgent||""), JSON.stringify(r.referer||""),
-      r.country||"", r.city||"", r.createdAt?.toISOString?.() || r.createdAt
+    const [rows] = await q(`SELECT ${LOG_COLUMNS} FROM RequestLogs ORDER BY id DESC LIMIT ${LOG_LIMIT}`);
+    const header = "id,method,path,userId,ip,statusCode,durationMs,queryParams,bodyParams,country,city,userAgent,referer,createdAt\n";
+    const csv = header + rows.map((r) => [
+      csvEscape(r.id ?? ""),
+      csvEscape(r.method ?? ""),
+      csvEscape(r.path ?? ""),
+      csvEscape(r.userId ?? ""),
+      csvEscape(r.ip ?? ""),
+      csvEscape(r.statusCode ?? ""),
+      csvEscape(r.durationMs ?? ""),
+      csvEscape(r.queryParams || ""),
+      csvEscape(r.bodyParams || ""),
+      csvEscape(r.country || ""),
+      csvEscape(r.city || ""),
+      csvEscape(r.userAgent || ""),
+      csvEscape(r.referer || ""),
+      csvEscape(r.createdAt?.toISOString?.() || r.createdAt || "")
     ].join(",")).join("\n");
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", 'attachment; filename="request-logs.csv"');
     res.send(csv);
   } catch (e) {
     console.error("admin/logs/export:", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/logs/export-json", requireAuth, requireRole(["super-admin"]), async (_req, res) => {
+  try {
+    const [rows] = await q(`SELECT ${LOG_COLUMNS} FROM RequestLogs ORDER BY id DESC LIMIT ${LOG_LIMIT}`);
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", 'attachment; filename="request-logs.json"');
+    res.send(JSON.stringify(rows || [], null, 2));
+  } catch (e) {
+    console.error("admin/logs/export-json:", e);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/audit-logs", requireAuth, requireRole(["super-admin"]), async (req, res) => {
+  try {
+    const { start, end, actorId } = req.query || {};
+    const conditions = [];
+    const params = [];
+    if (actorId) {
+      conditions.push("(actorId = ?)");
+      params.push(Number(actorId));
+    }
+    if (start) {
+      conditions.push("createdAt >= ?");
+      params.push(new Date(start));
+    }
+    if (end) {
+      conditions.push("createdAt <= ?");
+      params.push(new Date(end));
+    }
+    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const [rows] = await q(
+      `SELECT id, actorId, actorRole, action, entityType, entityId, beforeState, afterState, ip, notes, createdAt
+       FROM AuditLog
+       ${whereClause}
+       ORDER BY id DESC
+       LIMIT 200`,
+      params
+    );
+    res.json(rows || []);
+  } catch (err) {
+    console.error("admin/audit-logs:", err);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/audit-logs/export", requireAuth, requireRole(["super-admin"]), async (req, res) => {
+  try {
+    const { start, end, actorId } = req.query || {};
+    const conditions = [];
+    const params = [];
+    if (actorId) {
+      conditions.push("(actorId = ?)");
+      params.push(Number(actorId));
+    }
+    if (start) {
+      conditions.push("createdAt >= ?");
+      params.push(new Date(start));
+    }
+    if (end) {
+      conditions.push("createdAt <= ?");
+      params.push(new Date(end));
+    }
+    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const [rows] = await q(
+      `SELECT id, actorId, actorRole, action, entityType, entityId, beforeState, afterState, ip, notes, createdAt
+       FROM AuditLog
+       ${whereClause}
+       ORDER BY id DESC
+       LIMIT 1000`,
+      params
+    );
+    const header = "id,actorId,actorRole,action,entityType,entityId,beforeState,afterState,ip,notes,createdAt\n";
+    const csv = header + rows.map((r) => [
+      csvEscape(r.id ?? ""),
+      csvEscape(r.actorId ?? ""),
+      csvEscape(r.actorRole || ""),
+      csvEscape(r.action || ""),
+      csvEscape(r.entityType || ""),
+      csvEscape(r.entityId || ""),
+      csvEscape(r.beforeState || ""),
+      csvEscape(r.afterState || ""),
+      csvEscape(r.ip || ""),
+      csvEscape(r.notes || ""),
+      csvEscape(r.createdAt?.toISOString?.() || r.createdAt || ""),
+    ].join(",")).join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", 'attachment; filename="audit-logs.csv"');
+    res.send(csv);
+  } catch (err) {
+    console.error("admin/audit-logs/export:", err);
+    res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/metrics/summary", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const snapshot = await buildMetricsSnapshot();
+    res.json(snapshot);
+  } catch (err) {
+    console.error("admin/metrics/summary:", err);
     res.status(500).json({ error: "SERVER" });
   }
 });

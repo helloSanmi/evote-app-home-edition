@@ -11,6 +11,7 @@ const http = require("http");
 
 const app = express();
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 // Security & compression
 app.use(helmet({
@@ -81,11 +82,13 @@ io.on("connection", (socket) => {
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 5050);
 const { ensureSchema } = require("./dbMigrations");
+const { startDataGovernanceScheduler } = require("./utils/retention");
 
 async function start() {
   try {
     await ensureSchema();
     server.listen(PORT, HOST, () => console.log(`Server running on http://${HOST}:${PORT}`));
+    startDataGovernanceScheduler();
   } catch (err) {
     console.error("Failed to prepare database schema:", err);
     process.exit(1);

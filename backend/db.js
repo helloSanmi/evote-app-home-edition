@@ -1,4 +1,6 @@
 const mysql = require("mysql2/promise");
+const fs = require("fs");
+const path = require("path");
 
 let pool;
 
@@ -6,6 +8,31 @@ function normalizeParam(value) {
   if (typeof value === "boolean") return value ? 1 : 0;
   if (value instanceof Date && Number.isFinite(value.getTime?.())) return value;
   return value ?? null;
+}
+
+function buildSslConfig() {
+  const mode = (process.env.DB_SSL || "").toLowerCase();
+  if (!mode || mode === "disable" || mode === "false") return undefined;
+  const ssl = {
+    rejectUnauthorized: mode !== "allow",
+  };
+
+  const inlineCa = process.env.DB_SSL_CA;
+  if (inlineCa) {
+    ssl.ca = inlineCa.replace(/\\n/g, "\n");
+  }
+
+  const caPath = process.env.DB_SSL_CA_PATH;
+  if (!ssl.ca && caPath) {
+    try {
+      const resolved = path.isAbsolute(caPath) ? caPath : path.join(process.cwd(), caPath);
+      ssl.ca = fs.readFileSync(resolved, "utf8");
+    } catch (err) {
+      console.warn("[db] Failed to read CA certificate:", err.message);
+    }
+  }
+
+  return ssl;
 }
 
 function getDbPool() {
@@ -23,6 +50,7 @@ function getDbPool() {
     multipleStatements: false,
     supportBigNumbers: true,
     bigNumberStrings: true,
+    ssl: buildSslConfig(),
   });
   return pool;
 }
