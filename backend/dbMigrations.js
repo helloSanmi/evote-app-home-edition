@@ -1,4 +1,33 @@
+const fs = require("fs");
+const path = require("path");
 const { q } = require("./db");
+
+function splitSqlStatements(sql) {
+  const cleaned = sql
+    .split(/\r?\n/)
+    .map((line) => line.replace(/--.*$/, "").trim())
+    .filter(Boolean)
+    .join("\n");
+
+  return cleaned
+    .split(/;\s*(?:\r?\n|$)/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function ensureBaseSchema() {
+  const schemaPath = path.join(__dirname, "DBRelated", "schema.sql");
+  if (!fs.existsSync(schemaPath)) {
+    console.warn("[db] schema.sql not found; skipping base schema bootstrap");
+    return;
+  }
+
+  const schemaSql = fs.readFileSync(schemaPath, "utf8");
+  const statements = splitSqlStatements(schemaSql);
+  for (const statement of statements) {
+    await q(statement);
+  }
+}
 
 async function ensureRoleColumn() {
   const [[roleColumn]] = await q(
@@ -98,6 +127,7 @@ async function alignRolesWithFlags() {
 }
 
 async function ensureSchema() {
+  await ensureBaseSchema();
   await ensureRoleColumn();
   await ensureChatTables();
   await alignRolesWithFlags();
