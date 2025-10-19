@@ -13,7 +13,7 @@ function firstName(value) {
 }
 
 async function findOpenSessionForUser(user) {
-  const [[existing]] = await q(`SELECT TOP 1 * FROM ChatSession WHERE userId=? AND status <> 'closed' ORDER BY createdAt DESC`, [user.id]);
+  const [[existing]] = await q(`SELECT * FROM ChatSession WHERE userId=? AND status <> 'closed' ORDER BY createdAt DESC LIMIT 1`, [user.id]);
   return existing || null;
 }
 
@@ -21,11 +21,11 @@ async function getOrCreateSessionForUser(user) {
   const existing = await findOpenSessionForUser(user);
   if (existing) return existing;
   const display = firstName(user.username || user.email || `User #${user.id}`);
-  await q(
+  const [result] = await q(
     `INSERT INTO ChatSession (userId, userName, status) VALUES (?,?, 'pending')`,
     [user.id, display || `User #${user.id}`]
   );
-  const [[fresh]] = await q(`SELECT TOP 1 * FROM ChatSession WHERE userId=? ORDER BY createdAt DESC`, [user.id]);
+  const [[fresh]] = await q(`SELECT * FROM ChatSession WHERE id=? LIMIT 1`, [result.insertId]);
   return fresh;
 }
 
@@ -128,11 +128,12 @@ function generateGuestToken() {
 async function findGuestSessionByToken(token) {
   if (!token) return null;
   const [[row]] = await q(
-    `SELECT TOP 1 s.*, g.token
+    `SELECT s.*, g.token
      FROM ChatGuestToken g
      JOIN ChatSession s ON s.id = g.sessionId
      WHERE g.token=?
-     ORDER BY s.createdAt DESC`,
+     ORDER BY s.createdAt DESC
+     LIMIT 1`,
     [token]
   );
   if (!row) return null;
@@ -143,13 +144,14 @@ async function findGuestSessionByToken(token) {
 async function createGuestSession(name) {
   const token = generateGuestToken();
   const cleaned = (name || "").trim();
-  const [[session]] = await q(
+  const [result] = await q(
     `INSERT INTO ChatSession (userId, userName, status)
-     OUTPUT INSERTED.*
      VALUES (NULL, ?, 'pending')`,
     [cleaned]
   );
-  await q(`INSERT INTO ChatGuestToken (sessionId, token) VALUES (?, ?)`, [session.id, token]);
+  const sessionId = result.insertId;
+  await q(`INSERT INTO ChatGuestToken (sessionId, token) VALUES (?, ?)`, [sessionId, token]);
+  const [[session]] = await q(`SELECT * FROM ChatSession WHERE id=? LIMIT 1`, [sessionId]);
   return { session, token };
 }
 
@@ -165,13 +167,13 @@ async function recordInboundMessage({ session, body, senderType, senderId, sende
   const wantsHuman = shouldEscalateToHuman(trimmed);
   const hasAdmin = Boolean(session.assignedAdminId);
   const botReply = !hasAdmin && !wantsHuman ? getBotReply(trimmed) : null;
-  const [[lastBot]] = await q(`SELECT TOP 1 senderType, body FROM ChatMessage WHERE sessionId=? AND senderType='bot' ORDER BY id DESC`, [session.id]);
+  const [[lastBot]] = await q(`SELECT senderType, body FROM ChatMessage WHERE sessionId=? AND senderType='bot' ORDER BY id DESC LIMIT 1`, [session.id]);
   const alreadySentDefault = lastBot?.body === assistantDefaultReply;
   const shouldEscalate = wantsHuman;
   const nextStatus = hasAdmin ? "active" : shouldEscalate ? "pending" : "bot";
-  await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME(), status=? WHERE id=?`, [nextStatus, session.id]);
+  await q(`UPDATE ChatSession SET lastMessageAt=UTC_TIMESTAMP(), status=? WHERE id=?`, [nextStatus, session.id]);
 
-  const [[created]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+  const [[created]] = await q(`SELECT * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC LIMIT 1`, [session.id]);
   const payload = { ...rowToMessage(created), sessionId: session.id };
   io?.to(`chat:${session.id}`).emit("chat:message", payload);
   io?.emit("chat:sessions:update");
@@ -185,8 +187,8 @@ async function recordInboundMessage({ session, body, senderType, senderId, sende
       "Assistant",
       botReply,
     ]);
-    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
-    const [[botMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+    await q(`UPDATE ChatSession SET lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [session.id]);
+    const [[botMessage]] = await q(`SELECT * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC LIMIT 1`, [session.id]);
     const botPayload = { ...rowToMessage(botMessage), sessionId: session.id };
     io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
     return { payload, nextStatus };
@@ -200,8 +202,8 @@ async function recordInboundMessage({ session, body, senderType, senderId, sende
       "Assistant",
       assistantDefaultReply,
     ]);
-    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
-    const [[defaultMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+    await q(`UPDATE ChatSession SET lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [session.id]);
+    const [[defaultMessage]] = await q(`SELECT * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC LIMIT 1`, [session.id]);
     const botPayload = { ...rowToMessage(defaultMessage), sessionId: session.id };
     io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
     return { payload, nextStatus };
@@ -215,8 +217,8 @@ async function recordInboundMessage({ session, body, senderType, senderId, sende
       "Assistant",
       fallbackEscalationReply,
     ]);
-    await q(`UPDATE ChatSession SET lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
-    const [[escalationMessage]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [session.id]);
+    await q(`UPDATE ChatSession SET lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [session.id]);
+    const [[escalationMessage]] = await q(`SELECT * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC LIMIT 1`, [session.id]);
     const botPayload = { ...rowToMessage(escalationMessage), sessionId: session.id };
     io?.to(`chat:${session.id}`).emit("chat:message", botPayload);
   }
@@ -338,7 +340,7 @@ router.post("/guest/session/close", async (req, res) => {
     if (!found) return res.status(404).json({ error: "NOT_FOUND", message: "Guest chat not found." });
     const { session } = found;
     if (session.status === "closed") return res.json({ success: true });
-    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
+    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [session.id]);
     const io = req.app.get("io");
     io?.emit("chat:sessions:update");
     io?.to(`chat:${session.id}`).emit("chat:session:update", { id: session.id, status: "closed" });
@@ -359,9 +361,10 @@ router.get("/sessions", requireAuth, requireRole(["admin", "super-admin"]), asyn
       params.push(status.toLowerCase());
     }
     const [rows] = await q(
-      `SELECT TOP 50 id, userId, userName, status, assignedAdminId, assignedAdminName, lastMessageAt, createdAt
+      `SELECT id, userId, userName, status, assignedAdminId, assignedAdminName, lastMessageAt, createdAt
        FROM ChatSession ${where}
-       ORDER BY lastMessageAt DESC`,
+       ORDER BY lastMessageAt DESC
+       LIMIT 50`,
       params
     );
     res.json(rows.map(rowToSession));
@@ -393,7 +396,7 @@ router.post("/sessions/:id/assign", requireAuth, requireRole(["admin", "super-ad
     if (!session) return res.status(404).json({ error: "NOT_FOUND" });
     const adminName = firstName(req.user.username || req.user.email || `Admin #${req.user.id}`) || `Admin #${req.user.id}`;
     await q(
-      `UPDATE ChatSession SET assignedAdminId=?, assignedAdminName=?, status='active', lastMessageAt=SYSUTCDATETIME() WHERE id=?`,
+      `UPDATE ChatSession SET assignedAdminId=?, assignedAdminName=?, status='active', lastMessageAt=UTC_TIMESTAMP() WHERE id=?`,
       [req.user.id, adminName, sid]
     );
     const [[updated]] = await q(`SELECT * FROM ChatSession WHERE id=?`, [sid]);
@@ -420,12 +423,12 @@ router.post("/sessions/:id/message", requireAuth, requireRole(["admin", "super-a
       `INSERT INTO ChatMessage (sessionId, senderType, senderId, senderName, body) VALUES (?,?,?,?,?)`,
       [sid, "admin", req.user.id, senderName, message.trim()]
     );
-    await q(`UPDATE ChatSession SET status='active', assignedAdminId=COALESCE(assignedAdminId, ?), assignedAdminName=COALESCE(assignedAdminName, ?), lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [
+    await q(`UPDATE ChatSession SET status='active', assignedAdminId=COALESCE(assignedAdminId, ?), assignedAdminName=COALESCE(assignedAdminName, ?), lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [
       req.user.id,
       senderName,
       sid,
     ]);
-    const [[created]] = await q(`SELECT TOP 1 * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC`, [sid]);
+    const [[created]] = await q(`SELECT * FROM ChatMessage WHERE sessionId=? ORDER BY id DESC LIMIT 1`, [sid]);
     const payload = { ...rowToMessage(created), sessionId: sid };
     const io = req.app.get("io");
     io?.to(`chat:${sid}`).emit("chat:message", payload);
@@ -441,7 +444,7 @@ router.post("/sessions/:id/close", requireAuth, requireRole(["admin", "super-adm
   try {
     const sid = Number(req.params.id || 0);
     if (!sid) return res.status(400).json({ error: "MISSING_ID" });
-    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [sid]);
+    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [sid]);
     const io = req.app.get("io");
     io?.emit("chat:sessions:update");
     io?.to(`chat:${sid}`).emit("chat:session:update", { id: sid, status: 'closed' });
@@ -472,7 +475,7 @@ router.delete("/sessions/:id", requireAuth, requireRole(["super-admin"]), async 
 
 router.get("/session/history", requireAuth, async (req, res) => {
   try {
-    const [rows] = await q(`SELECT TOP 20 id, status, assignedAdminName, lastMessageAt, createdAt FROM ChatSession WHERE userId=? ORDER BY createdAt DESC`, [req.user.id]);
+    const [rows] = await q(`SELECT id, status, assignedAdminName, lastMessageAt, createdAt FROM ChatSession WHERE userId=? ORDER BY createdAt DESC LIMIT 20`, [req.user.id]);
     res.json({ sessions: rows.map(rowToSession) });
   } catch (e) {
     console.error("chat/session/history:", e);
@@ -498,7 +501,7 @@ router.post("/session/close", requireAuth, async (req, res) => {
   try {
     const session = await findOpenSessionForUser(req.user);
     if (!session) return res.status(404).json({ error: "NO_OPEN_SESSION", message: "No active conversation to close" });
-    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=SYSUTCDATETIME() WHERE id=?`, [session.id]);
+    await q(`UPDATE ChatSession SET status='closed', lastMessageAt=UTC_TIMESTAMP() WHERE id=?`, [session.id]);
     const io = req.app.get("io");
     io?.emit("chat:sessions:update");
     io?.to(`chat:${session.id}`).emit("chat:session:update", { id: session.id, status: 'closed' });

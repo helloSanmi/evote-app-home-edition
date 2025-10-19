@@ -34,8 +34,7 @@ router.post("/register", async (req, res) => {
     );
     res.json({ success: true });
   } catch (e) {
-    const sqlState = e?.number ?? e?.originalError?.info?.number;
-    const dup = sqlState === 2627 || sqlState === 2601;
+    const dup = e?.code === "ER_DUP_ENTRY";
     res.status(dup ? 409 : 500).json({ error: dup ? "DUPLICATE" : "SERVER", message: dup ? "Username/email already exists" : "Server error" });
   }
 });
@@ -47,7 +46,7 @@ router.post("/login", async (req, res) => {
     if (!identifier || !password) {
       return res.status(400).json({ error: "MISSING_FIELDS", message: "Please provide your username or email and password." });
     }
-    const [[u]] = await q(`SELECT TOP 1 * FROM Users WHERE username=? OR email=?`, [identifier, identifier]);
+    const [[u]] = await q(`SELECT * FROM Users WHERE username=? OR email=? LIMIT 1`, [identifier, identifier]);
     if (!u) {
       return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Incorrect username or password." });
     }
@@ -79,7 +78,7 @@ router.post("/login", async (req, res) => {
 
 router.post("/refresh-role", requireAuth, async (req, res) => {
   try {
-    const [[u]] = await q(`SELECT TOP 1 * FROM Users WHERE id=?`, [req.user.id]);
+    const [[u]] = await q(`SELECT * FROM Users WHERE id=? LIMIT 1`, [req.user.id]);
     if (!u) return res.status(404).json({ error: "NOT_FOUND" });
     const role = normalizeRole(u);
     if (u.role !== role) {
@@ -108,7 +107,7 @@ router.post("/reset-simple", async (req, res) => {
   try {
     const { username, dateOfBirth, phone, newPassword } = req.body || {};
     if (!username || !dateOfBirth || !phone || !newPassword) return res.status(400).json({ error: "MISSING_FIELDS" });
-    const [[u]] = await q(`SELECT TOP 1 id FROM Users WHERE username=? AND dateOfBirth=? AND phone=?`, [username, dateOfBirth, phone]);
+    const [[u]] = await q(`SELECT id FROM Users WHERE username=? AND dateOfBirth=? AND phone=? LIMIT 1`, [username, dateOfBirth, phone]);
     if (!u) return res.status(404).json({ error: "NOT_FOUND", message: "No matching user" });
     const hash = await bcrypt.hash(newPassword, 10);
     await q(`UPDATE Users SET password=? WHERE id=?`, [hash, u.id]);

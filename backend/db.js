@@ -1,6 +1,6 @@
-const sql = require("mssql");
+const mysql = require("mysql2/promise");
 
-let poolPromise = null;
+let pool;
 
 function normalizeParam(value) {
   if (typeof value === "boolean") return value ? 1 : 0;
@@ -8,45 +8,30 @@ function normalizeParam(value) {
   return value ?? null;
 }
 
-async function getDbPool() {
-  if (poolPromise) return poolPromise;
-  const config = {
+function getDbPool() {
+  if (pool) return pool;
+  pool = mysql.createPool({
+    host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    server: process.env.DB_HOST,
     database: process.env.DB_NAME,
-    port: Number(process.env.DB_PORT || 1433),
-    options: {
-      encrypt: process.env.DB_ENCRYPT ? process.env.DB_ENCRYPT !== "false" : true,
-      trustServerCertificate: process.env.DB_TRUST_CERT === "true",
-    },
-    pool: {
-      max: Number(process.env.DB_POOL_MAX || 10),
-      min: 0,
-      idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT || 30000),
-    },
-  };
-  poolPromise = sql.connect(config).catch((err) => {
-    poolPromise = null;
-    throw err;
+    port: Number(process.env.DB_PORT || 3306),
+    waitForConnections: true,
+    connectionLimit: Number(process.env.DB_POOL_MAX || 10),
+    queueLimit: 0,
+    timezone: "Z",
+    multipleStatements: false,
+    supportBigNumbers: true,
+    bigNumberStrings: true,
   });
-  return poolPromise;
+  return pool;
 }
 
 async function q(text, params = []) {
-  const pool = await getDbPool();
-  const request = pool.request();
-  let paramIndex = 0;
-  const parsed = text.replace(/\?/g, () => {
-    const name = `p${paramIndex}`;
-    if (paramIndex >= params.length) throw new Error("Parameter count mismatch");
-    request.input(name, normalizeParam(params[paramIndex]));
-    paramIndex += 1;
-    return `@${name}`;
-  });
-  if (paramIndex < params.length) throw new Error("Parameter count mismatch");
-  const result = await request.query(parsed);
-  return [result.recordset || [], result];
+  const pool = getDbPool();
+  const normalized = params.map(normalizeParam);
+  const [rows, fields] = await pool.execute(text, normalized);
+  return [rows, fields];
 }
 
 async function one(text, params = []) {
@@ -55,8 +40,8 @@ async function one(text, params = []) {
 }
 
 async function getConn() {
-  const pool = await getDbPool();
-  return pool.request();
+  const pool = getDbPool();
+  return pool.getConnection();
 }
 
 module.exports = { getDbPool, q, one, getConn };

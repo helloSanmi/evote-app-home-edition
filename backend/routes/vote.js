@@ -22,9 +22,10 @@ router.get("/status", requireAuth, async (req, res) => {
     const pid = Number(req.query.periodId || 0);
     if (!pid) return res.status(400).json({ error: "MISSING_ID" });
     const [[v]] = await q(
-      `SELECT TOP 1 v.id, v.candidateId, c.name
+      `SELECT v.id, v.candidateId, c.name
        FROM Votes v JOIN Candidates c ON c.id=v.candidateId
-       WHERE v.periodId=? AND v.userId=?`, [pid, req.user.id]
+       WHERE v.periodId=? AND v.userId=?
+       LIMIT 1`, [pid, req.user.id]
     );
     res.json({ hasVoted: !!v, youVoted: v ? { id: v.candidateId, name: v.name } : null });
   } catch (e) {
@@ -39,13 +40,13 @@ router.post("/", requireAuth, async (req, res) => {
     const cid = Number(req.body?.candidateId || 0);
     if (!cid) return res.status(400).json({ error: "MISSING_FIELD", message: "candidateId required" });
 
-    const [[candidate]] = await q(`SELECT TOP 1 id, periodId, state, lga FROM Candidates WHERE id=?`, [cid]);
+    const [[candidate]] = await q(`SELECT id, periodId, state, lga FROM Candidates WHERE id=? LIMIT 1`, [cid]);
     if (!candidate?.periodId) return res.status(400).json({ error: "INVALID", message: "Candidate not in a session" });
 
-    const [[period]] = await q(`SELECT TOP 1 id, minAge, scope, scopeState, scopeLGA, startTime, requireWhitelist FROM VotingPeriod WHERE id=?`, [candidate.periodId]);
+    const [[period]] = await q(`SELECT id, minAge, scope, scopeState, scopeLGA, startTime, requireWhitelist FROM VotingPeriod WHERE id=? LIMIT 1`, [candidate.periodId]);
     if (!period) return res.status(404).json({ error: "NOT_FOUND" });
 
-    const [[user]] = await q(`SELECT TOP 1 email, state, residenceLGA, dateOfBirth FROM Users WHERE id=?`, [req.user.id]);
+    const [[user]] = await q(`SELECT email, state, residenceLGA, dateOfBirth FROM Users WHERE id=? LIMIT 1`, [req.user.id]);
 
     const periodScope = (period.scope || 'national').toLowerCase();
     if (periodScope === 'state') {
@@ -63,7 +64,7 @@ router.post("/", requireAuth, async (req, res) => {
     const minAge = Math.max(Number(period.minAge || 0), 18);
     if (myAge < minAge) return res.status(403).json({ error: "FORBIDDEN", message: "You must be at least 18 to vote" });
 
-    const [[dupe]] = await q(`SELECT TOP 1 id FROM Votes WHERE userId=? AND periodId=?`, [req.user.id, period.id]);
+    const [[dupe]] = await q(`SELECT id FROM Votes WHERE userId=? AND periodId=? LIMIT 1`, [req.user.id, period.id]);
     if (dupe) return res.status(409).json({ error: "DUPLICATE", message: "You already voted" });
 
     const poolAdapter = { query: (sqlText, params = []) => q(sqlText, params) };

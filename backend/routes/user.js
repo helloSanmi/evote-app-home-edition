@@ -14,10 +14,11 @@ const router = express.Router();
 router.get("/profile", requireAuth, async (req, res) => {
   try {
     const u = await one(
-      `SELECT TOP 1 id, fullName, username, email,
+      `SELECT id, fullName, username, email,
               state, residenceLGA, phone, nationality,
               dateOfBirth, eligibilityStatus, profilePhoto, hasVoted, createdAt
-       FROM Users WHERE id=?`,
+       FROM Users WHERE id=?
+       LIMIT 1`,
       [req.user.id]
     );
     if (!u) return res.status(404).json({ message: "User not found" });
@@ -40,10 +41,11 @@ router.put("/profile", requireAuth, async (req, res) => {
       [state, residenceLGA, phone, dateOfBirth, req.user.id]
     );
     const u = await one(
-      `SELECT TOP 1 id, fullName, username, email,
+      `SELECT id, fullName, username, email,
               state, residenceLGA, phone, nationality,
               dateOfBirth, eligibilityStatus, profilePhoto, hasVoted, createdAt
-       FROM Users WHERE id=?`,
+       FROM Users WHERE id=?
+       LIMIT 1`,
       [req.user.id]
     );
     res.json(u);

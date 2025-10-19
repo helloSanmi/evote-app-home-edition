@@ -19,7 +19,7 @@ function calcAgeOn(dateOfBirth, atDate) {
 async function whitelistOK(pool, user, period) {
   if (!period.requireWhitelist) return true;
   const [rows] = await pool.query(
-    "SELECT TOP 1 id FROM EligibleVoters WHERE (email IS NOT NULL AND email=?) OR (voterId IS NOT NULL AND voterId=?)",
+    "SELECT id FROM EligibleVoters WHERE (email IS NOT NULL AND email=?) OR (voterId IS NOT NULL AND voterId=?) LIMIT 1",
     [user.email || null, user.nationalId || null]
   );
   return rows.length > 0;

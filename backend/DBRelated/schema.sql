@@ -1,193 +1,128 @@
 -- backend/DBRelated/schema.sql
--- Azure SQL (SQL Server) schema for the voting app. Designed to be idempotent.
+-- MySQL schema for the voting app. Statements are idempotent where possible.
 
-IF OBJECT_ID(N'dbo.Users', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.Users (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        fullName NVARCHAR(120) NOT NULL,
-        username NVARCHAR(60) NOT NULL UNIQUE,
-        email NVARCHAR(200) NOT NULL UNIQUE,
-        password NVARCHAR(255) NOT NULL,
-        state NVARCHAR(100) NULL,
-        residenceLGA NVARCHAR(100) NULL,
-        phone NVARCHAR(40) NULL,
-        nationality NVARCHAR(80) NULL,
-        dateOfBirth DATE NULL,
-        role NVARCHAR(30) NOT NULL CONSTRAINT DF_Users_role DEFAULT N'user',
-        eligibilityStatus NVARCHAR(20) NOT NULL CONSTRAINT DF_Users_Eligibility DEFAULT N'pending',
-        profilePhoto NVARCHAR(500) NULL,
-        hasVoted BIT NOT NULL CONSTRAINT DF_Users_hasVoted DEFAULT 0,
-        isAdmin BIT NOT NULL CONSTRAINT DF_Users_isAdmin DEFAULT 0,
-        createdAt DATETIME2 NOT NULL CONSTRAINT DF_Users_createdAt DEFAULT SYSUTCDATETIME()
-    );
-END;
-GO
+CREATE TABLE IF NOT EXISTS Users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  fullName VARCHAR(120) NOT NULL,
+  username VARCHAR(60) NOT NULL UNIQUE,
+  email VARCHAR(200) NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL,
+  state VARCHAR(100) NULL,
+  residenceLGA VARCHAR(100) NULL,
+  phone VARCHAR(40) NULL,
+  nationality VARCHAR(80) NULL,
+  dateOfBirth DATE NULL,
+  role VARCHAR(30) NOT NULL DEFAULT 'user',
+  eligibilityStatus VARCHAR(20) NOT NULL DEFAULT 'pending',
+  profilePhoto VARCHAR(500) NULL,
+  hasVoted TINYINT(1) NOT NULL DEFAULT 0,
+  isAdmin TINYINT(1) NOT NULL DEFAULT 0,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF COL_LENGTH('dbo.Users', 'role') IS NULL
-BEGIN
-    ALTER TABLE dbo.Users
-        ADD role NVARCHAR(30) NOT NULL CONSTRAINT DF_Users_role DEFAULT N'user' WITH VALUES;
-END;
-GO
+CREATE TABLE IF NOT EXISTS VotingPeriod (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(200) NULL,
+  description TEXT NULL,
+  startTime DATETIME NOT NULL,
+  endTime DATETIME NOT NULL,
+  minAge TINYINT UNSIGNED NOT NULL DEFAULT 18,
+  scope VARCHAR(20) NOT NULL DEFAULT 'national',
+  scopeState VARCHAR(100) NULL,
+  scopeLGA VARCHAR(100) NULL,
+  resultsPublished TINYINT(1) NOT NULL DEFAULT 0,
+  forcedEnded TINYINT(1) NOT NULL DEFAULT 0,
+  requireWhitelist TINYINT(1) NOT NULL DEFAULT 0,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_votingperiod_endTime (endTime)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF OBJECT_ID(N'dbo.VotingPeriod', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.VotingPeriod (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        title NVARCHAR(200) NULL,
-        description NVARCHAR(MAX) NULL,
-        startTime DATETIME2 NOT NULL,
-        endTime DATETIME2 NOT NULL,
-        minAge TINYINT NOT NULL CONSTRAINT DF_VotingPeriod_minAge DEFAULT 18,
-        scope NVARCHAR(20) NOT NULL CONSTRAINT DF_VotingPeriod_scope DEFAULT N'national',
-        scopeState NVARCHAR(100) NULL,
-        scopeLGA NVARCHAR(100) NULL,
-        resultsPublished BIT NOT NULL CONSTRAINT DF_VotingPeriod_resultsPublished DEFAULT 0,
-        forcedEnded BIT NOT NULL CONSTRAINT DF_VotingPeriod_forcedEnded DEFAULT 0,
-        requireWhitelist BIT NOT NULL CONSTRAINT DF_VotingPeriod_requireWhitelist DEFAULT 0,
-        createdAt DATETIME2 NOT NULL CONSTRAINT DF_VotingPeriod_createdAt DEFAULT SYSUTCDATETIME()
-    );
-END;
-GO
+CREATE TABLE IF NOT EXISTS Candidates (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  state VARCHAR(100) NULL,
+  lga VARCHAR(100) NULL,
+  photoUrl VARCHAR(500) NULL,
+  periodId INT NULL,
+  published TINYINT(1) NOT NULL DEFAULT 0,
+  votes INT NOT NULL DEFAULT 0,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_candidates_period FOREIGN KEY (periodId) REFERENCES VotingPeriod(id) ON DELETE SET NULL,
+  KEY idx_candidates_period (periodId),
+  KEY idx_candidates_published (published)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_VotingPeriod_Time' AND object_id = OBJECT_ID(N'dbo.VotingPeriod')
-)
-BEGIN
-    CREATE INDEX IX_VotingPeriod_Time ON dbo.VotingPeriod(endTime);
-END;
-GO
+CREATE TABLE IF NOT EXISTS Votes (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  userId INT NOT NULL,
+  candidateId INT NOT NULL,
+  periodId INT NOT NULL,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_votes_user_period (userId, periodId),
+  CONSTRAINT fk_votes_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_votes_candidate FOREIGN KEY (candidateId) REFERENCES Candidates(id) ON DELETE CASCADE,
+  CONSTRAINT fk_votes_period FOREIGN KEY (periodId) REFERENCES VotingPeriod(id) ON DELETE CASCADE,
+  KEY idx_votes_candidate (candidateId),
+  KEY idx_votes_period (periodId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF OBJECT_ID(N'dbo.Candidates', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.Candidates (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        name NVARCHAR(120) NOT NULL,
-        state NVARCHAR(100) NULL,
-        lga NVARCHAR(100) NULL,
-        photoUrl NVARCHAR(500) NULL,
-        periodId INT NULL,
-        published BIT NOT NULL CONSTRAINT DF_Candidates_published DEFAULT 0,
-        votes INT NOT NULL CONSTRAINT DF_Candidates_votes DEFAULT 0,
-        createdAt DATETIME2 NOT NULL CONSTRAINT DF_Candidates_createdAt DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_Candidates_Period FOREIGN KEY (periodId) REFERENCES dbo.VotingPeriod(id) ON DELETE SET NULL
-    );
-END;
-GO
+CREATE TABLE IF NOT EXISTS EligibleVoters (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  periodId INT NOT NULL,
+  email VARCHAR(255) NULL,
+  voterId VARCHAR(255) NULL,
+  lga VARCHAR(100) NULL,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_eligible_period FOREIGN KEY (periodId) REFERENCES VotingPeriod(id) ON DELETE CASCADE,
+  UNIQUE KEY ux_eligible_period_email (periodId, email),
+  UNIQUE KEY ux_eligible_period_voter (periodId, voterId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_Candidates_Period' AND object_id = OBJECT_ID(N'dbo.Candidates')
-)
-BEGIN
-    CREATE INDEX IX_Candidates_Period ON dbo.Candidates(periodId);
-END;
-GO
+CREATE TABLE IF NOT EXISTS RequestLogs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  method VARCHAR(10) NOT NULL,
+  path VARCHAR(255) NOT NULL,
+  userId INT NULL,
+  ip VARCHAR(64) NOT NULL,
+  country VARCHAR(2) NULL,
+  city VARCHAR(100) NULL,
+  userAgent VARCHAR(255) NULL,
+  referer VARCHAR(255) NULL,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_requestlogs_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE SET NULL,
+  KEY idx_requestlogs_created (createdAt),
+  KEY idx_requestlogs_user (userId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_Candidates_Published' AND object_id = OBJECT_ID(N'dbo.Candidates')
-)
-BEGIN
-    CREATE INDEX IX_Candidates_Published ON dbo.Candidates(published);
-END;
-GO
+CREATE TABLE IF NOT EXISTS ChatSession (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  userId INT NULL,
+  userName VARCHAR(200) NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  assignedAdminId INT NULL,
+  assignedAdminName VARCHAR(200) NULL,
+  lastMessageAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_chatsession_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_chatsession_admin FOREIGN KEY (assignedAdminId) REFERENCES Users(id) ON DELETE SET NULL,
+  KEY idx_chatsession_status (status, lastMessageAt)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF OBJECT_ID(N'dbo.Votes', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.Votes (
-        id BIGINT IDENTITY(1,1) PRIMARY KEY,
-        userId INT NOT NULL,
-        candidateId INT NOT NULL,
-        periodId INT NOT NULL,
-        createdAt DATETIME2 NOT NULL CONSTRAINT DF_Votes_createdAt DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_Votes_User FOREIGN KEY (userId) REFERENCES dbo.Users(id) ON DELETE CASCADE,
-        CONSTRAINT FK_Votes_Candidate FOREIGN KEY (candidateId) REFERENCES dbo.Candidates(id) ON DELETE CASCADE,
-        CONSTRAINT FK_Votes_Period FOREIGN KEY (periodId) REFERENCES dbo.VotingPeriod(id) ON DELETE CASCADE,
-        CONSTRAINT UQ_Votes_User_Period UNIQUE (userId, periodId)
-    );
-END;
-GO
+CREATE TABLE IF NOT EXISTS ChatMessage (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  sessionId INT NOT NULL,
+  senderType VARCHAR(20) NOT NULL,
+  senderId INT NULL,
+  senderName VARCHAR(200) NULL,
+  body TEXT NOT NULL,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_chatmessage_session FOREIGN KEY (sessionId) REFERENCES ChatSession(id) ON DELETE CASCADE,
+  KEY idx_chatmessage_session (sessionId, createdAt)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_Votes_Candidate' AND object_id = OBJECT_ID(N'dbo.Votes')
-)
-BEGIN
-    CREATE INDEX IX_Votes_Candidate ON dbo.Votes(candidateId);
-END;
-GO
-
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_Votes_Period' AND object_id = OBJECT_ID(N'dbo.Votes')
-)
-BEGIN
-    CREATE INDEX IX_Votes_Period ON dbo.Votes(periodId);
-END;
-GO
-
-IF OBJECT_ID(N'dbo.EligibleVoters', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.EligibleVoters (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        periodId INT NOT NULL,
-        email NVARCHAR(255) NULL,
-        voterId NVARCHAR(255) NULL,
-        lga NVARCHAR(100) NULL,
-        createdAt DATETIME2 NOT NULL CONSTRAINT DF_EligibleVoters_createdAt DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_EligibleVoters_Period FOREIGN KEY (periodId) REFERENCES dbo.VotingPeriod(id) ON DELETE CASCADE
-    );
-END;
-GO
-
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'UX_EligibleVoters_PeriodEmail' AND object_id = OBJECT_ID(N'dbo.EligibleVoters')
-)
-BEGIN
-    CREATE UNIQUE INDEX UX_EligibleVoters_PeriodEmail
-        ON dbo.EligibleVoters(periodId, email)
-        WHERE email IS NOT NULL;
-END;
-GO
-
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'UX_EligibleVoters_PeriodVoter' AND object_id = OBJECT_ID(N'dbo.EligibleVoters')
-)
-BEGIN
-    CREATE UNIQUE INDEX UX_EligibleVoters_PeriodVoter
-        ON dbo.EligibleVoters(periodId, voterId)
-        WHERE voterId IS NOT NULL;
-END;
-GO
-
-IF OBJECT_ID(N'dbo.RequestLogs', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.RequestLogs (
-        id BIGINT IDENTITY(1,1) PRIMARY KEY,
-        method NVARCHAR(10) NOT NULL,
-        path NVARCHAR(255) NOT NULL,
-        userId INT NULL,
-        ip NVARCHAR(64) NOT NULL,
-        country NVARCHAR(2) NULL,
-        city NVARCHAR(100) NULL,
-        userAgent NVARCHAR(255) NULL,
-        referer NVARCHAR(255) NULL,
-        createdAt DATETIME2 NOT NULL CONSTRAINT DF_RequestLogs_createdAt DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_RequestLogs_User FOREIGN KEY (userId) REFERENCES dbo.Users(id) ON DELETE SET NULL
-    );
-END;
-GO
-
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_RequestLogs_Created' AND object_id = OBJECT_ID(N'dbo.RequestLogs')
-)
-BEGIN
-    CREATE INDEX IX_RequestLogs_Created ON dbo.RequestLogs(createdAt DESC);
-END;
-GO
-
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = N'IX_RequestLogs_User' AND object_id = OBJECT_ID(N'dbo.RequestLogs')
-)
-BEGIN
-    CREATE INDEX IX_RequestLogs_User ON dbo.RequestLogs(userId);
-END;
-GO
+CREATE TABLE IF NOT EXISTS ChatGuestToken (
+  sessionId INT NOT NULL PRIMARY KEY,
+  token VARCHAR(200) NOT NULL UNIQUE,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_chatguesttoken_session FOREIGN KEY (sessionId) REFERENCES ChatSession(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

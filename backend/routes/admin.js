@@ -96,14 +96,13 @@ router.post("/voting-period", requireAuth, requireAdmin, async (req, res) => {
       });
     }
 
-    const [insertRows] = await q(
+    const [insertResult] = await q(
       `INSERT INTO VotingPeriod (title, description, startTime, endTime, minAge, scope, scopeState, scopeLGA, resultsPublished, forcedEnded)
-       OUTPUT INSERTED.id
        VALUES (?,?,?,?,?,?,?,?,0,0)`,
       [title, description || null, new Date(start), new Date(end), Math.max(Number(minAge || 18), 18),
        electionScope, scopeState || null, scopeLGA || null]
     );
-    const insertId = insertRows?.[0]?.id;
+    const insertId = insertResult?.insertId;
 
     if (!insertId) throw new Error("Failed to create voting period");
 
@@ -162,9 +161,10 @@ router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => 
       period = row;
     } else {
       const [[row]] = await q(
-        `SELECT TOP 1 id, forcedEnded, resultsPublished FROM VotingPeriod
-         WHERE forcedEnded=0 AND resultsPublished=0 AND endTime > SYSUTCDATETIME()
-         ORDER BY endTime ASC`
+        `SELECT id, forcedEnded, resultsPublished FROM VotingPeriod
+         WHERE forcedEnded=0 AND resultsPublished=0 AND endTime > UTC_TIMESTAMP()
+         ORDER BY endTime ASC
+         LIMIT 1`
       );
       if (!row) return res.json({ success: true, already: true });
       period = row;
@@ -194,9 +194,10 @@ router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
       period = row;
     } else {
       const [[row]] = await q(
-        `SELECT TOP 1 id, resultsPublished FROM VotingPeriod
-         WHERE resultsPublished=0 AND (forcedEnded=1 OR endTime <= SYSUTCDATETIME())
-         ORDER BY endTime DESC`
+        `SELECT id, resultsPublished FROM VotingPeriod
+         WHERE resultsPublished=0 AND (forcedEnded=1 OR endTime <= UTC_TIMESTAMP())
+         ORDER BY endTime DESC
+         LIMIT 1`
       );
       if (!row) return res.json({ success: true, already: true });
       period = row;
@@ -278,8 +279,7 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
     );
     res.json({ success: true });
   } catch (e) {
-    const number = e?.number ?? e?.originalError?.info?.number;
-    if (number === 2627 || number === 2601) {
+    if (e?.code === "ER_DUP_ENTRY") {
       return res.status(409).json({ error: "DUPLICATE", message: "Username or email already exists" });
     }
     console.error("admin/users/create:", e);
@@ -369,9 +369,9 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
       return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
     }
     await q(`DELETE FROM Users WHERE id=?`, [uid]);
-    const [[row]] = await q(`SELECT ISNULL(MAX(id),0) AS maxId FROM Users`);
-    const reseedTo = Number.isFinite(Number(row?.maxId)) ? Number(row.maxId) : 0;
-    await q(`DBCC CHECKIDENT('Users', RESEED, ${reseedTo});`);
+    const [[row]] = await q(`SELECT IFNULL(MAX(id),0) AS maxId FROM Users`);
+    const maxId = Number.isFinite(Number(row?.maxId)) ? Number(row.maxId) : 0;
+    await q(`ALTER TABLE Users AUTO_INCREMENT=?`, [maxId + 1]);
     res.json({ success: true });
   } catch (e) {
     console.error("admin/users/delete:", e);
@@ -429,7 +429,7 @@ router.post("/users/:id/role", requireAuth, requireRole(["super-admin"]), async 
 // logs
 router.get("/logs", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const [rows] = await q(`SELECT TOP 500 id,method,path,userId,ip,userAgent,referer,country,city,createdAt FROM RequestLogs ORDER BY id DESC`);
+    const [rows] = await q(`SELECT id,method,path,userId,ip,userAgent,referer,country,city,createdAt FROM RequestLogs ORDER BY id DESC LIMIT 500`);
     res.json(rows || []);
   } catch (e) {
     console.error("admin/logs:", e);
