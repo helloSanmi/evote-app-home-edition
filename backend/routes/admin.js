@@ -293,23 +293,29 @@ router.post("/periods/delete", requireAuth, requireAdmin, removePeriod);
 // users management
 router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res) => {
   try {
-    const { fullName, username, email, password, phone, state, residenceLGA, role } = req.body || {};
+    const { fullName, username, email, password, phone, state, residenceLGA, role, nationality } = req.body || {};
     if (!fullName || !username || !email || !password) {
       return res.status(400).json({ error: "MISSING_FIELDS", message: "Full name, username, email, and password are required" });
     }
     const normalizedRole = (role || "user").toLowerCase() === "admin" ? "admin" : "user";
+    const nameParts = String(fullName || "").trim().split(/\s+/);
+    const primaryName = nameParts.shift() || "";
+    const secondaryName = nameParts.length ? nameParts.join(" ") : primaryName;
     const hash = await bcrypt.hash(password.trim(), 10);
     const [result] = await q(
-      `INSERT INTO Users (fullName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted, role, isAdmin)
-       VALUES (?,?,?,?,?,?,?,?,NULL,'active',0,?,?)`,
+      `INSERT INTO Users (fullName, firstName, lastName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted, role, isAdmin)
+       VALUES (?,?,?,?,?,?,?,?,?,NULL,'active',0,?,?)`,
       [
         fullName,
+        primaryName || null,
+        secondaryName || null,
         username,
         email,
         hash,
         state || null,
         residenceLGA || null,
         phone || null,
+        nationality || null,
         normalizedRole,
         normalizedRole === "admin" ? 1 : 0,
       ]

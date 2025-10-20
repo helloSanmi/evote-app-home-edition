@@ -6,34 +6,34 @@ import { notifyError } from "../components/Toast";
 
 const heroSlides = [
   {
-    eyebrow: "Enterprise ready",
-    title: "Launch credible elections in days, not months.",
-    description: "Design, announce, and monitor national or local ballots with auditable transparency and zero guesswork.",
+    eyebrow: "National mandate",
+    title: "Deliver credible elections from a single command platform.",
+    description: "Coordinate federal, state, and local results with provable integrity, built for election commissions and government partners.",
     highlights: [
-      "Tamper-evident records and automated reconciliation.",
-      "Role-based access for commissioners, observers, and admins.",
+      "Full compliance with national electoral regulations across all regions.",
+      "Chain-of-custody dashboards for ballots, observers, and result forms.",
     ],
     gradient: "from-indigo-100 via-sky-50 to-white",
     accent: "bg-indigo-500",
   },
   {
-    eyebrow: "Real-time visibility",
-    title: "Track participation and turnout as it happens.",
-    description: "Live dashboards keep your operations centre informed, with alerts when engagement drops or anomalies appear.",
+    eyebrow: "Command visibility",
+    title: "Track turnout and infrastructure readiness as it happens.",
+    description: "National situation rooms monitor live participation, logistics, and security escalation pathways on one synchronized map.",
     highlights: [
-      "Realtime Socket.IO feeds for turnout, chat, and announcements.",
-      "Automated compliance alerts with admin playbooks.",
+      "State-by-state turnout heat maps with historic baselines.",
+      "Automated anomaly alerts and incident workflows for rapid response.",
     ],
     gradient: "from-emerald-100 via-teal-50 to-white",
     accent: "bg-emerald-500",
   },
   {
-    eyebrow: "Voter centric",
-    title: "Give every voter a guided, accessible journey.",
-    description: "Branded portals, multilingual support, and assistive flows help everyone get registered and vote with confidence.",
+    eyebrow: "Inclusive access",
+    title: "Every citizen guided securely from registration to results.",
+    description: "Multilingual portals, diaspora support, and accessibility-first flows make the national ballot available to every eligible voter.",
     highlights: [
-      "Progressive profiling, eligibility checks, and queue relief.",
-      "Live chat escalations with secure admin hand-off.",
+      "Progressive verification for citizens at home and abroad.",
+      "Accessibility compliance for assistive technologies and rural bandwidth.",
     ],
     gradient: "from-rose-100 via-fuchsia-50 to-white",
     accent: "bg-rose-500",
@@ -42,38 +42,38 @@ const heroSlides = [
 
 const strategicPillars = [
   {
-    title: "Verified identity",
-    body: "Multi-factor sign-in with Google and password flows, plus automated eligibility lists to keep ballots accurate.",
+    title: "Identity assurance",
+    body: "Integrate national ID registries, diaspora rolls, and observer whitelists with layered verification and audit trails.",
   },
   {
-    title: "Secure operations",
-    body: "Encrypted JWT sessions, audit trails, and rate limits protect the platform even during peak turnout.",
+    title: "Resilient operations",
+    body: "Geo-redundant infrastructure, end-to-end encryption, and adaptive rate limiting maintain uptime under election-day load.",
   },
   {
-    title: "Insights & recovery",
-    body: "Exportable reports, retention sweeps, and rich analytics keep decision makers informed and compliant.",
+    title: "Transparent accountability",
+    body: "Realtime reconciliation reports, observer dashboards, and exportable audit packs satisfy domestic and international oversight.",
   },
 ];
 
 const deliverySteps = [
-  { title: "Plan & configure", detail: "Create sessions, scopes, and candidate slates tailored for your electorate." },
-  { title: "Invite & verify", detail: "Import eligibility lists or send enrolment links with automatic reminders." },
-  { title: "Monitor & respond", detail: "Follow live dashboards, collaborate with admins, and resolve voter requests instantly." },
-  { title: "Publish & audit", detail: "Release certified results and distribute read-only audit trails to stakeholders." },
+  { title: "Calibrate the election", detail: "Set the national calendar, map constituencies, and onboard central and state administrators." },
+  { title: "Accredit officials & voters", detail: "Synchronise national ID, diaspora, and observer lists with automated notifications and reminders." },
+  { title: "Coordinate election day", detail: "Monitor turnout, logistics, and security signals while resolving incidents through SOP playbooks." },
+  { title: "Declare & archive", detail: "Publish certified results, lodge requisite forms, and hand audit evidence to oversight bodies." },
 ];
 
 const capabilityBlocks = [
   {
-    title: "Live command centre",
-    description: "Monitor vote windows, turnout momentum, and chat escalations from a single operational cockpit.",
+    title: "Unified command centre",
+    description: "National, state, and LGA dashboards share turnout, incidents, and escalations in real time with role-based controls.",
   },
   {
-    title: "Data governance",
-    description: "Automated retention jobs tidy dormant records while preserving evidence for regulators.",
+    title: "Electoral data governance",
+    description: "Retention policies, legal holds, and anonymisation schedules uphold statutory requirements and privacy mandates.",
   },
   {
-    title: "Extensible APIs",
-    description: "Socket and REST APIs integrate with call centres, SMS gateways, and analytics warehouses.",
+    title: "Interoperable services",
+    description: "REST and socket APIs integrate with call centres, SMS gateways, accreditation devices, and observer portals.",
   },
 ];
 
@@ -274,10 +274,10 @@ export default function Home() {
           <section className="border-b border-slate-200 bg-white">
             <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-8 px-4 py-10 sm:px-6 lg:px-10">
               {[
-                { value: "200k+", label: "Verified voters onboarded" },
-                { value: "97%", label: "Average voter satisfaction" },
-                { value: "50+", label: "Election programmes delivered" },
-                { value: "<2m", label: "Median support response time" },
+                { value: "80M+", label: "Registered voters supported nationwide" },
+                { value: "36", label: "States & FCT synchronized in real time" },
+                { value: "176k", label: "Polling units monitored end-to-end" },
+                { value: "99.98%", label: "Election week platform availability" },
               ].map((stat) => (
                 <div key={stat.label} className="flex flex-col">
                   <span className="text-3xl font-semibold text-slate-900 sm:text-4xl">{stat.value}</span>
@@ -294,10 +294,10 @@ export default function Home() {
                   <span className="inline-flex w-fit items-center gap-2 rounded-full bg-indigo-50 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">
                     Platform pillars
                   </span>
-                  <h2 className="mt-4 text-3xl font-semibold text-slate-900 sm:text-4xl">Why election teams choose our stack.</h2>
+                  <h2 className="mt-4 text-3xl font-semibold text-slate-900 sm:text-4xl">The digital backbone for national election delivery.</h2>
                 </div>
                 <p className="max-w-lg text-sm sm:text-base">
-                  From identity assurance to audited results, every module works together to deliver confidence at national scale.
+                  From identity assurance to declaration night, each module reinforces trust for federal election commissions and their partners.
                 </p>
               </div>
               <div className="grid gap-6 md:grid-cols-3">
@@ -319,16 +319,16 @@ export default function Home() {
                 </span>
                 <h2 className="text-3xl font-semibold text-slate-900 sm:text-4xl">From concept to certified results in four stages.</h2>
                 <p className="text-base text-slate-600">
-                  We pair proven workflows with a dedicated success team so your rollout is predictable, defensible, and on schedule.
+                  Proven government playbooks pair technology with policy guidance, ensuring each stage aligns with constitutional and INEC/commission directives.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3 text-sm text-indigo-600">
                   <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-2">
                     <span className="h-2 w-2 rounded-full bg-indigo-400" />
-                    Configurable voting scopes
+                    Configurable constituency and diaspora scopes
                   </span>
                   <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-2">
                     <span className="h-2 w-2 rounded-full bg-indigo-400" />
-                    Guided voter onboarding
+                    Guided citizen onboarding & accreditation
                   </span>
                 </div>
               </div>
@@ -354,7 +354,7 @@ export default function Home() {
                 <span className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
                   Operational excellence
                 </span>
-                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Capabilities designed for resilient elections.</h3>
+                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Capabilities designed for resilient national ballots.</h3>
               </div>
               <div className="grid gap-6 lg:grid-cols-3">
                 {capabilityBlocks.map((item) => (
@@ -373,23 +373,23 @@ export default function Home() {
                 <span className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-600">
                   Partnership first
                 </span>
-                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Expert support from kickoff to certification.</h3>
+                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Expert support from voter registration to national declaration.</h3>
                 <p className="text-base text-slate-600">
-                  Our election success team trains your admins, monitors live sessions, and keeps stakeholders aligned through final audit sign-off.
+                  National support centres, regional command rooms, and international observers rely on our joint operations team for guidance at every critical phase.
                 </p>
               </div>
               <div className="grid gap-4 text-sm text-slate-600">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">Advisory</span>
-                  <p className="mt-2 text-base text-slate-900">Dedicated strategist assigned to every election window with round-the-clock escalation paths.</p>
+                  <p className="mt-2 text-base text-slate-900">Dedicated electoral operations strategists embedded with your commission and security services.</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">Training</span>
-                  <p className="mt-2 text-base text-slate-900">Role-based walkthroughs for administrators, observers, call-centre staff, and returning officers.</p>
+                  <p className="mt-2 text-base text-slate-900">Role-based walkthroughs for commissioners, returning officers, call-centre agents, and observers nationwide.</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">Continuity</span>
-                  <p className="mt-2 text-base text-slate-900">Post-election reviews, lessons learned, and structured updates for the next cycle.</p>
+                  <p className="mt-2 text-base text-slate-900">Post-election audits, lessons learned, and readiness programmes for subsequent electoral cycles.</p>
                 </div>
               </div>
             </div>
@@ -400,18 +400,18 @@ export default function Home() {
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-4 sm:px-6 lg:px-10">
             <div className="grid gap-8 lg:grid-cols-[1.2fr_1fr]">
               <div>
-                <h4 className="text-lg font-semibold text-slate-900">Voting App</h4>
+                <h4 className="text-lg font-semibold text-slate-900">National Digital Voting Platform</h4>
                 <p className="mt-3 max-w-lg text-sm text-slate-600">
-                  A trusted digital election platform for governments, professional bodies, and member-first organizations.
+                  Secure infrastructure for election commissions overseeing nationwide, state, local, and diaspora ballots.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3 text-xs text-slate-500">
                   <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2">
                     <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                    ISO-ready security controls
+                    Certified compliance & national data residency
                   </span>
                   <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2">
                     <span className="h-2 w-2 rounded-full bg-sky-400" />
-                    24/7 global support
+                    24/7 national operations centre
                   </span>
                 </div>
               </div>
@@ -533,3 +533,6 @@ export default function Home() {
     return activePeriod || null;
   }
 }
+
+Home.disableGlobalFooter = true;
+Home.fullWidthLayout = true;

@@ -197,6 +197,55 @@ async function ensureAuditLogTable() {
   `);
 }
 
+async function ensureIdentityColumns() {
+  const columns = [
+    { name: "firstName", sql: "ALTER TABLE Users ADD COLUMN firstName VARCHAR(60) NULL AFTER fullName" },
+    { name: "lastName", sql: "ALTER TABLE Users ADD COLUMN lastName VARCHAR(60) NULL AFTER firstName" },
+    { name: "gender", sql: "ALTER TABLE Users ADD COLUMN gender VARCHAR(20) NULL AFTER dateOfBirth" },
+    { name: "nationalId", sql: "ALTER TABLE Users ADD COLUMN nationalId VARCHAR(30) NULL AFTER gender" },
+    { name: "voterCardNumber", sql: "ALTER TABLE Users ADD COLUMN voterCardNumber VARCHAR(30) NULL AFTER nationalId" },
+    { name: "residenceAddress", sql: "ALTER TABLE Users ADD COLUMN residenceAddress VARCHAR(255) NULL AFTER voterCardNumber" },
+  ];
+
+  for (const column of columns) {
+    const [[exists]] = await q(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='Users' AND COLUMN_NAME=?`,
+      [column.name]
+    );
+    if (!exists) {
+      await q(column.sql);
+    }
+  }
+
+  await q(`
+    UPDATE Users
+    SET
+      firstName = CASE
+        WHEN (firstName IS NULL OR firstName = '')
+          THEN NULLIF(TRIM(SUBSTRING_INDEX(fullName, ' ', 1)), '')
+        ELSE firstName
+      END,
+      lastName = CASE
+        WHEN (lastName IS NULL OR lastName = '')
+          THEN NULLIF(
+            TRIM(
+              CASE
+                WHEN fullName LIKE '% %' THEN SUBSTRING(fullName, LOCATE(' ', fullName) + 1)
+                ELSE fullName
+              END
+            ), ''
+          )
+        ELSE lastName
+      END
+    WHERE fullName IS NOT NULL
+  `);
+
+  await ensureIndex("Users", "uq_users_nationalId", "ALTER TABLE Users ADD UNIQUE KEY uq_users_nationalId (nationalId)");
+  await ensureIndex("Users", "uq_users_voterCard", "ALTER TABLE Users ADD UNIQUE KEY uq_users_voterCard (voterCardNumber)");
+}
+
 async function alignRolesWithFlags() {
   const adminUsernames = envSet(process.env.ADMIN_USERNAMES);
   const adminEmails = envSet(process.env.ADMIN_EMAILS);
@@ -237,6 +286,7 @@ async function ensureSchema() {
   await ensureRoleColumn();
   await ensureChatStatusColumn();
   await ensureGoogleIdColumn();
+  await ensureIdentityColumns();
   await ensureUserLifecycleColumns();
   await ensureChatTables();
   await alignRolesWithFlags();

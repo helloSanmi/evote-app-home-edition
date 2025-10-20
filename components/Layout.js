@@ -1,4 +1,5 @@
 // frontend/components/Layout.js
+import { useMemo } from "react";
 import Navbar from "./Navbar";
 import CookieBanner from "./CookieBanner";
 import InactivityGuard from "./InactivityGuard";
@@ -6,7 +7,16 @@ import dynamic from "next/dynamic";
 
 const AssistantChat = dynamic(() => import("./AssistantChat"), { ssr: false });
 
-export default function Layout({ children }) {
+export default function Layout({ children, disableFooter = false, fullWidth = false }) {
+  const content = useMemo(() => {
+    if (fullWidth) return children;
+    return (
+      <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 lg:py-10">
+        {children}
+      </div>
+    );
+  }, [children, fullWidth]);
+
   return (
     <div className="relative min-h-screen flex flex-col overflow-x-hidden text-slate-900">
       <div
@@ -20,16 +30,16 @@ export default function Layout({ children }) {
       />
       <Navbar />
       <main className="flex-1 w-full">
-        <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 lg:py-10">
-          {children}
-        </div>
+        {content}
       </main>
-      <footer className="border-t border-slate-200/60 bg-white backdrop-blur">
-        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 text-sm text-slate-600 md:px-8">
-          <span>© {new Date().getFullYear()} Tech Analytics</span>
-          <a className="hover:text-slate-900 transition-colors" href="/faq">FAQ</a>
-        </div>
-      </footer>
+      {!disableFooter && (
+        <footer className="border-t border-slate-200/60 bg-white backdrop-blur">
+          <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 text-sm text-slate-600 md:px-8">
+            <span>© {new Date().getFullYear()} Tech Analytics</span>
+            <a className="hover:text-slate-900 transition-colors" href="/faq">FAQ</a>
+          </div>
+        </footer>
+      )}
       <CookieBanner />
       <AssistantChat />
       <InactivityGuard />

@@ -5,14 +5,46 @@ import { mediaUrl } from "../lib/mediaUrl";
 import { notifyError, notifySuccess } from "../components/Toast";
 
 export default function Profile() {
+  const genderOptions = [
+    { value: "male", label: "Male" },
+    { value: "female", label: "Female" },
+    { value: "non-binary", label: "Non-binary" },
+    { value: "prefer-not-to-say", label: "Prefer not to say" },
+  ];
   const [user, setUser] = useState(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ state: "", residenceLGA: "", phone: "", dateOfBirth: "" });
+  const [form, setForm] = useState({
+    state: "",
+    residenceLGA: "",
+    phone: "",
+    dateOfBirth: "",
+    gender: "",
+    residenceAddress: "",
+  });
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const pendingDeletion = Boolean(user?.deletedAt);
   const purgeDate = user?.purgeAt ? new Date(user.purgeAt) : null;
+
+  const formatStatus = (value) => {
+    if (!value) return "-";
+    const label = String(value).replace(/[_-]+/g, " ").toLowerCase();
+    return label.replace(/\b\w/g, (l) => l.toUpperCase());
+  };
+
+  const formatGender = (value) => {
+    if (!value) return "-";
+    const match = genderOptions.find((option) => option.value === String(value).toLowerCase());
+    return match ? match.label : formatStatus(value);
+  };
+
+  const formatDate = (value) => {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    return date.toISOString().slice(0, 10);
+  };
 
   // Your JSON might be {states:[{state, lgas}]} or { "Abia": [...] }. Normalize:
   const norm = useMemo(() => {
@@ -38,12 +70,25 @@ export default function Profile() {
           localStorage.setItem("fullName", me.fullName || me.username || "");
           localStorage.setItem("state", me.state || "");
           localStorage.setItem("residenceLGA", me.residenceLGA || "");
+          if (me.needsProfileCompletion) {
+            localStorage.setItem("needsProfileCompletion", "true");
+          } else {
+            localStorage.removeItem("needsProfileCompletion");
+          }
+          if (me.firstName) {
+            localStorage.setItem("firstName", me.firstName);
+          }
+          if (me.lastName) {
+            localStorage.setItem("lastName", me.lastName);
+          }
         }
         setForm({
           state: me.state || "",
           residenceLGA: me.residenceLGA || "",
           phone: me.phone || "",
           dateOfBirth: (me.dateOfBirth || "").slice(0, 10),
+          gender: (me.gender || "").toLowerCase(),
+          residenceAddress: me.residenceAddress || "",
         });
       } catch (e) {
         notifyError(e.message || "Failed to load profile");
@@ -56,12 +101,13 @@ export default function Profile() {
     setBusy(true);
     try {
       await jput("/api/profile", {
-        fullName: user.fullName, // unchanged
         state: form.state || null,
         residenceLGA: form.residenceLGA || null,
-        phone: form.phone || null,
+        phone: form.phone ? form.phone.trim() : null,
         dateOfBirth: form.dateOfBirth || null,
-      }); // backend/profile.js PUT / (updates Users) :contentReference[oaicite:3]{index=3}
+        gender: form.gender || null,
+        residenceAddress: form.residenceAddress ? form.residenceAddress.trim() : null,
+      });
       notifySuccess("Profile updated");
       setEditing(false);
       const me = await jget("/api/profile/me");
@@ -159,11 +205,60 @@ export default function Profile() {
         </div>
       </div>
 
+      {user.needsProfileCompletion && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="font-semibold text-amber-900">Profile information incomplete</div>
+          <p className="mt-1">
+            Provide your civic details to unlock every feature of the platform.
+            <Link href="/complete-profile" className="ml-1 font-semibold text-amber-900 underline">Complete profile now</Link>
+          </p>
+        </div>
+      )}
+
       {/* Only these fields are editable */}
       <div className="bg-white rounded-2xl shadow p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Field label="Full name" value={user.fullName} />
+        <Field label="First name" value={user.firstName || "-"} />
+        <Field label="Last name" value={user.lastName || "-"} />
         <Field label="Username" value={user.username} />
         <Field label="Email" value={user.email} />
+        <Field label="Eligibility status" value={formatStatus(user.eligibilityStatus)} />
+
+        <Field label="Gender">
+          {editing ? (
+            <select
+              className="form-control"
+              value={form.gender}
+              onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
+            >
+              <option value="">Select gender…</option>
+              {genderOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          ) : <span>{formatGender(user.gender)}</span>}
+        </Field>
+
+        <Field label="Date of birth">
+          {editing ? (
+            <input
+              type="date"
+              className="form-control"
+              value={form.dateOfBirth}
+              onChange={(e) => setForm((f) => ({ ...f, dateOfBirth: e.target.value }))}
+            />
+          ) : <span>{formatDate(user.dateOfBirth)}</span>}
+        </Field>
+
+        <Field label="Phone">
+          {editing ? (
+            <input
+              className="form-control"
+              value={form.phone}
+              onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/[^0-9+()\s-]/g, "") }))}
+              placeholder="+234 800 000 0000"
+            />
+          ) : <span>{user.phone || "-"}</span>}
+        </Field>
 
         <Field label="State">
           {editing ? (
@@ -183,17 +278,21 @@ export default function Profile() {
           ) : <span>{user.residenceLGA || "-"}</span>}
         </Field>
 
-        <Field label="Phone">
+        <Field label="Residential address" className="md:col-span-2">
           {editing ? (
-            <input className="form-control" value={form.phone} onChange={e=>setForm(f=>({ ...f, phone: e.target.value }))}/>
-          ) : <span>{user.phone || "-"}</span>}
+            <textarea
+              className="form-control"
+              rows={2}
+              value={form.residenceAddress}
+              onChange={(e) => setForm((f) => ({ ...f, residenceAddress: e.target.value.replace(/[^A-Za-z0-9\s,.'/-]/g, "") }))}
+              placeholder="House number, street, town"
+            />
+          ) : <span>{user.residenceAddress || "-"}</span>}
         </Field>
 
-        <Field label="Date of birth">
-          {editing ? (
-            <input type="date" className="form-control" value={form.dateOfBirth} onChange={e=>setForm(f=>({ ...f, dateOfBirth: e.target.value }))}/>
-          ) : <span>{(user.dateOfBirth || "").slice(0,10) || "-"}</span>}
-        </Field>
+        <Field label="Nationality" value={user.nationality || "Nigerian"} />
+        <Field label="National ID (NIN)" value={user.nationalId || "-"} />
+        <Field label="PVC number" value={user.voterCardNumber || "-"} />
       </div>
 
       {/* Change password card (link to /reset-password flow you described) */}
@@ -236,11 +335,11 @@ export default function Profile() {
   );
 }
 
-function Field({ label, value, children }) {
+function Field({ label, value, children, className = "" }) {
   return (
-    <div>
-      <div className="text-xs text-gray-600">{label}</div>
-      {children ? children : <div className="font-medium">{value ?? "-"}</div>}
+    <div className={className}>
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{label}</div>
+      {children ? children : <div className="mt-1 text-sm font-medium text-slate-900">{value ?? "-"}</div>}
     </div>
   );
 }

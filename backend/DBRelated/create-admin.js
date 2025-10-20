@@ -17,10 +17,10 @@ const mysql = require("mysql2/promise");
     const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
     const [result] = await conn.execute(
-      `INSERT INTO Users (fullName, username, email, password, hasVoted, isAdmin, role, chatStatus)
-       VALUES (?,?,?,?,0,1,'admin','offline')
-       ON DUPLICATE KEY UPDATE password=VALUES(password), role='admin', isAdmin=1, chatStatus='offline'`,
-      ["Vote Admin", "voteadm", "admin@techanalytics.org", hashedPassword]
+      `INSERT INTO Users (fullName, firstName, lastName, username, email, password, hasVoted, isAdmin, role, chatStatus)
+       VALUES (?,?,?,?,?,?,0,1,'admin','offline')
+       ON DUPLICATE KEY UPDATE password=VALUES(password), role='admin', isAdmin=1, chatStatus='offline', firstName=VALUES(firstName), lastName=VALUES(lastName)`,
+      ["Vote Admin", "Vote", "Admin", "voteadm", "admin@techanalytics.org", hashedPassword]
     );
 
     const newId = result.insertId || null;

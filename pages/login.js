@@ -13,6 +13,7 @@ export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [accountDisabled, setAccountDisabled] = useState(null);
 
   const persistAuth = (data) => {
     localStorage.setItem("token", data.token);
@@ -22,6 +23,26 @@ export default function Login() {
       localStorage.setItem("fullName", data.fullName);
     } else {
       localStorage.removeItem("fullName");
+    }
+    if (data.firstName) {
+      localStorage.setItem("firstName", data.firstName);
+    } else {
+      localStorage.removeItem("firstName");
+    }
+    if (data.lastName) {
+      localStorage.setItem("lastName", data.lastName);
+    } else {
+      localStorage.removeItem("lastName");
+    }
+    if (data.eligibilityStatus) {
+      localStorage.setItem("eligibilityStatus", data.eligibilityStatus);
+    } else {
+      localStorage.removeItem("eligibilityStatus");
+    }
+    if (data.requiresProfileCompletion) {
+      localStorage.setItem("needsProfileCompletion", "true");
+    } else {
+      localStorage.removeItem("needsProfileCompletion");
     }
     localStorage.setItem("profilePhoto", data.profilePhoto || "/avatar.png");
     localStorage.setItem("role", (data.role || "user").toLowerCase());
@@ -33,8 +54,13 @@ export default function Login() {
     persistAuth(data);
     notifySuccess(message);
     reidentifySocket();
-    const nextRole = (data.role || "user").toLowerCase();
-    const destination = nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/";
+    let destination = "/";
+    if (data.requiresProfileCompletion) {
+      destination = "/complete-profile";
+    } else {
+      const nextRole = (data.role || "user").toLowerCase();
+      destination = nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/";
+    }
     try {
       await router.replace(destination);
     } catch (err) {
@@ -46,7 +72,11 @@ export default function Login() {
 
   useEffect(() => {
     try {
-      if (localStorage.getItem("token")) {
+      if (typeof window !== "undefined" && localStorage.getItem("token")) {
+        if (localStorage.getItem("needsProfileCompletion") === "true" && window.location.pathname !== "/complete-profile") {
+          router.replace("/complete-profile");
+          return;
+        }
         const role = (localStorage.getItem("role") || "").toLowerCase();
         if (role === "admin" || role === "super-admin") {
           router.replace("/admin");
@@ -66,11 +96,19 @@ export default function Login() {
       return;
     }
     setBusy(true);
+    setAccountDisabled(null);
     try {
       const data = await apiPost("/api/auth/login", { identifier, password });
       await finishLogin(data);
       return;
     } catch (e2) {
+      if (e2?.code === "ACCOUNT_DISABLED") {
+        setAccountDisabled({
+          message: e2.message || "This account is currently disabled. Reactivate it to continue.",
+        });
+        setBusy(false);
+        return;
+      }
       notifyError(e2.message || "Unable to sign you in. Please try again.");
       setBusy(false);
     }
@@ -79,11 +117,19 @@ export default function Login() {
   const handleGoogleCredential = async (credential) => {
     if (!credential) return;
     setBusy(true);
+    setAccountDisabled(null);
     try {
       const data = await apiPost("/api/auth/google", { credential });
       await finishLogin(data, "Signed in with Google");
       return;
     } catch (err) {
+      if (err?.code === "ACCOUNT_DISABLED") {
+        setAccountDisabled({
+          message: err.message || "This account is currently disabled. Reactivate it to continue.",
+        });
+        setBusy(false);
+        return;
+      }
       notifyError(err.message || "Google sign in failed");
       setBusy(false);
     }
@@ -148,6 +194,19 @@ export default function Login() {
                       autoComplete="current-password"
                     />
                   </div>
+                  {accountDisabled && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      <p>{accountDisabled.message}</p>
+                      <button
+                        type="button"
+                        onClick={() => router.push("/reactivate")}
+                        className="mt-3 inline-flex items-center justify-center rounded-full border border-amber-300 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-amber-900 transition hover:border-amber-400 hover:bg-amber-100"
+                      >
+                        Reactivate account
+                      </button>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
                     disabled={busy}

@@ -12,6 +12,8 @@ import { getSocket, reidentifySocket } from "../lib/socket";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
+  const disableFooter = Component.disableGlobalFooter || false;
+  const fullWidthLayout = Component.fullWidthLayout || false;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -49,13 +51,28 @@ export default function App({ Component, pageProps }) {
     return () => socket.off("roleUpdated", handleRoleUpdated);
   }, [router]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const enforceProfileCompletion = () => {
+      const token = localStorage.getItem("token");
+      const needsCompletion = localStorage.getItem("needsProfileCompletion") === "true";
+      if (token && needsCompletion && router.pathname !== "/complete-profile") {
+        router.replace("/complete-profile");
+      }
+    };
+    enforceProfileCompletion();
+    const handleRouteChange = () => enforceProfileCompletion();
+    router.events.on("routeChangeComplete", handleRouteChange);
+    return () => router.events.off("routeChangeComplete", handleRouteChange);
+  }, [router]);
+
   return (
     <>
       <Head>
         <link rel="icon" href="/favicon.png" type="image/png" />
         <link rel="apple-touch-icon" href="/favicon.png" />
       </Head>
-      <Layout>
+      <Layout disableFooter={disableFooter} fullWidth={fullWidthLayout}>
         <Component {...pageProps} />
       </Layout>
       <ToastContainer position="top-center" />

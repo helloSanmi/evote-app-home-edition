@@ -10,17 +10,26 @@ export default function ResetPassword() {
   const [dob, setDob] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
+    if (!username.trim() || !dob || !phone.trim() || !password) {
+      notifyError("Fill in all fields before continuing.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      notifyError("Passwords must match.");
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch(joinApi("/api/auth/reset-simple"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username, dateOfBirth: dob, phone, newPassword: password }),
+        body: JSON.stringify({ username: username.trim(), dateOfBirth: dob, phone: phone.trim(), newPassword: password }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok || !d?.success) throw new Error(d?.message || "Recovery failed");
@@ -29,6 +38,7 @@ export default function ResetPassword() {
       setDob("");
       setPhone("");
       setPassword("");
+      setConfirmPassword("");
     } catch (e2) {
       notifyError(e2.message);
     } finally {
@@ -72,8 +82,8 @@ export default function ResetPassword() {
                 id="phone"
                 className="form-control"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="0800 000 0000"
+                onChange={(e) => setPhone(e.target.value.replace(/[^0-9+()\s-]/g, ""))}
+                placeholder="+234 800 000 0000"
                 autoComplete="tel"
               />
             </div>
@@ -86,6 +96,18 @@ export default function ResetPassword() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Create a secure password"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="form-label" htmlFor="confirm-password">Confirm new password</label>
+              <input
+                id="confirm-password"
+                type="password"
+                className="form-control"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Retype your new password"
                 autoComplete="new-password"
               />
             </div>
