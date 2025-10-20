@@ -29,14 +29,19 @@ export default function Login() {
     window.dispatchEvent(new Event("storage"));
   };
 
-  const finishLogin = (data, message = "Signed in successfully") => {
+  const finishLogin = async (data, message = "Signed in successfully") => {
     persistAuth(data);
     notifySuccess(message);
     reidentifySocket();
-    setTimeout(() => {
-      const nextRole = (data.role || "user").toLowerCase();
-      router.replace(nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/");
-    }, 400);
+    const nextRole = (data.role || "user").toLowerCase();
+    const destination = nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/";
+    try {
+      await router.replace(destination);
+    } catch (err) {
+      console.error("Navigation error after login:", err);
+      setBusy(false);
+      throw err;
+    }
   };
 
   useEffect(() => {
@@ -63,10 +68,10 @@ export default function Login() {
     setBusy(true);
     try {
       const data = await apiPost("/api/auth/login", { identifier, password });
-      finishLogin(data);
+      await finishLogin(data);
+      return;
     } catch (e2) {
       notifyError(e2.message || "Unable to sign you in. Please try again.");
-    } finally {
       setBusy(false);
     }
   };
@@ -76,18 +81,18 @@ export default function Login() {
     setBusy(true);
     try {
       const data = await apiPost("/api/auth/google", { credential });
-      finishLogin(data, "Signed in with Google");
+      await finishLogin(data, "Signed in with Google");
+      return;
     } catch (err) {
       notifyError(err.message || "Google sign in failed");
-    } finally {
       setBusy(false);
     }
   };
 
   return (
     <>
-      <div className="min-h-screen bg-slate-100">
-        <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-4 py-12 sm:px-6 lg:px-10">
+      <div className="flex min-h-screen items-center bg-slate-100">
+        <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-10">
           <div className="grid gap-10 md:grid-cols-2">
             <div className="flex flex-col justify-center">
               <span className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-4 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-indigo-500 shadow-sm">
