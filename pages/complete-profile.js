@@ -29,6 +29,7 @@ export default function CompleteProfile() {
   const statesData = useMemo(() => normalizeList(NG), []);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [existingProfile, setExistingProfile] = useState(null);
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -48,6 +49,29 @@ export default function CompleteProfile() {
     return entry?.lgas || [];
   }, [statesData, form.state]);
 
+  const summaryItems = useMemo(() => {
+    if (!existingProfile) return [];
+    return [
+      ["First name", existingProfile.firstName],
+      ["Last name", existingProfile.lastName],
+      ["Gender", existingProfile.gender ? existingProfile.gender.replace(/\b\w/g, (c) => c.toUpperCase()) : ""],
+      ["Date of birth", existingProfile.dateOfBirth ? existingProfile.dateOfBirth.slice(0, 10) : ""],
+      ["National ID (NIN)", existingProfile.nationalId],
+      ["Voter card number", existingProfile.voterCardNumber],
+      ["Residence address", existingProfile.residenceAddress],
+      ["State", existingProfile.state],
+      ["Local government", existingProfile.residenceLGA],
+      ["Phone number", existingProfile.phone],
+      ["Nationality", existingProfile.nationality],
+    ];
+  }, [existingProfile]);
+
+  const hasSummaryData = useMemo(() => summaryItems.some(([, value]) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string") return value.trim().length > 0;
+    return true;
+  }), [summaryItems]);
+
   useEffect(() => {
     let active = true;
     (async () => {
@@ -58,6 +82,7 @@ export default function CompleteProfile() {
         }
         const profile = await jget("/api/profile/me");
         if (!active) return;
+        setExistingProfile(profile);
         setForm((prev) => ({
           ...prev,
           firstName: profile.firstName || "",
@@ -210,6 +235,23 @@ export default function CompleteProfile() {
             These details help the commission confirm your identity and eligibility across national, state, and local programmes.
           </p>
         </div>
+
+        {hasSummaryData && (
+          <div className="mb-6 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm backdrop-blur">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Previously saved details</h2>
+            <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm text-slate-600 sm:grid-cols-2">
+              {summaryItems.map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
+                  <dd className="mt-0.5 text-slate-700">{value ? String(value) : <span className="italic text-slate-400">Not provided</span>}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mt-4 text-xs text-slate-500">
+              The form below is pre-filled with these details so you can review or update them before submitting.
+            </p>
+          </div>
+        )}
 
         <div className="card">
           <form onSubmit={submit} className="space-y-5">
