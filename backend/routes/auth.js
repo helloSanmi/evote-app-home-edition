@@ -438,8 +438,10 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
       u.role = role;
       u.isAdmin = role === "admin" || role === "super-admin" ? 1 : 0;
     }
-    const token = sign({ ...u, role });
+    const normalizedUser = { ...u, role };
+    const token = sign(normalizedUser);
     const isAdmin = role === "admin" || role === "super-admin";
+    const completionRequired = requiresProfileCompletion(normalizedUser);
     res.json({
       token,
       role,
@@ -448,6 +450,7 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
       username: u.username,
       fullName: u.fullName || u.username,
       profilePhoto: u.profilePhoto || null,
+      requiresProfileCompletion: completionRequired,
     });
   } catch (err) {
     console.error("auth/refresh-role:", err);

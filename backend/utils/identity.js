@@ -52,6 +52,8 @@ function validateDob(dob) {
 }
 
 function requiresProfileCompletion(user = {}) {
+  const role = String(user.role || "").toLowerCase();
+  if (role === "admin" || role === "super-admin") return false;
   return REQUIRED_PROFILE_FIELDS.some((field) => {
     const value = user[field];
     if (value === null || value === undefined) return true;

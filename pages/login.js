@@ -73,12 +73,14 @@ export default function Login() {
   useEffect(() => {
     try {
       if (typeof window !== "undefined" && localStorage.getItem("token")) {
-        if (localStorage.getItem("needsProfileCompletion") === "true" && window.location.pathname !== "/complete-profile") {
+        const role = (localStorage.getItem("role") || "").toLowerCase();
+        const privileged = role === "admin" || role === "super-admin";
+        const needsProfile = localStorage.getItem("needsProfileCompletion") === "true";
+        if (needsProfile && !privileged && window.location.pathname !== "/complete-profile") {
           router.replace("/complete-profile");
           return;
         }
-        const role = (localStorage.getItem("role") || "").toLowerCase();
-        if (role === "admin" || role === "super-admin") {
+        if (privileged) {
           router.replace("/admin");
         } else {
           const admin = localStorage.getItem("isAdmin");

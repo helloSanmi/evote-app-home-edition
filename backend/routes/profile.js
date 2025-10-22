@@ -50,7 +50,7 @@ const upload = multer({
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const [[u]] = await q(
-      `SELECT id, fullName, firstName, lastName, username, email, state, residenceLGA, dateOfBirth, phone, gender, nationality, residenceAddress, nationalId, voterCardNumber, eligibilityStatus, profilePhoto, createdAt, deletedAt, purgeAt
+      `SELECT id, fullName, firstName, lastName, username, email, state, residenceLGA, dateOfBirth, phone, gender, nationality, residenceAddress, nationalId, voterCardNumber, eligibilityStatus, profilePhoto, role, createdAt, deletedAt, purgeAt
        FROM Users WHERE id=?`,
       [req.user.id]
     );

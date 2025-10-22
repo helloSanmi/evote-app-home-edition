@@ -33,6 +33,15 @@ export default function App({ Component, pageProps }) {
           localStorage.removeItem("fullName");
         }
         if (data.profilePhoto) localStorage.setItem("profilePhoto", data.profilePhoto);
+        if (typeof data.requiresProfileCompletion === "boolean") {
+          if (data.requiresProfileCompletion) {
+            localStorage.setItem("needsProfileCompletion", "true");
+          } else {
+            localStorage.removeItem("needsProfileCompletion");
+          }
+        } else if (data.role === "admin" || data.role === "super-admin") {
+          localStorage.removeItem("needsProfileCompletion");
+        }
         window.dispatchEvent(new Event("storage"));
         reidentifySocket();
         const elevated = data.role === "admin" || data.role === "super-admin";
@@ -56,7 +65,9 @@ export default function App({ Component, pageProps }) {
     const enforceProfileCompletion = () => {
       const token = localStorage.getItem("token");
       const needsCompletion = localStorage.getItem("needsProfileCompletion") === "true";
-      if (token && needsCompletion && router.pathname !== "/complete-profile") {
+      const role = (localStorage.getItem("role") || "user").toLowerCase();
+      const privileged = role === "admin" || role === "super-admin";
+      if (token && needsCompletion && !privileged && router.pathname !== "/complete-profile") {
         router.replace("/complete-profile");
       }
     };
