@@ -36,6 +36,24 @@ export default function Register() {
   const [residenceAddress, setResidenceAddress] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const formatPvcInput = (value) => {
+    const raw = (value || "").toUpperCase();
+    const filtered = raw.replace(/[^A-Z0-9]/g, "");
+    let letter = "";
+    let digits = "";
+    for (const ch of filtered) {
+      if (!letter && /[A-Z]/.test(ch)) {
+        letter = ch;
+        continue;
+      }
+      if (/[0-9]/.test(ch) && digits.length < 2) {
+        digits += ch;
+      }
+      if (letter && digits.length === 2) break;
+    }
+    return letter + digits;
+  };
+
   const persistAuth = (data) => {
     localStorage.setItem("token", data.token);
     localStorage.setItem("userId", data.userId);
@@ -114,8 +132,8 @@ export default function Register() {
     const checkEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const checkPhone = /^[0-9+()\s-]{7,20}$/;
     const allowedGender = ["male", "female", "non-binary", "prefer-not-to-say"];
-    const ninPattern = /^[0-9]{11}$/;
-    const pvcPattern = /^[A-Z0-9]{8,20}$/;
+    const ninPattern = /^[0-9]{5}$/;
+    const pvcPattern = /^[A-Z][0-9]{2}$/;
 
     if (!checkName.test(first)) {
       notifyError("First name can only contain letters, hyphen, apostrophe, and periods.");
@@ -160,12 +178,12 @@ export default function Register() {
     }
     const sanitizedNIN = nationalId.trim();
     if (!ninPattern.test(sanitizedNIN)) {
-      notifyError("Enter an 11-digit National Identification Number (NIN) without spaces.");
+      notifyError("Enter a 5-digit National Identification Number (NIN) without spaces.");
       return;
     }
-    const sanitizedPVC = voterCardNumber.trim().toUpperCase();
+    const sanitizedPVC = formatPvcInput(voterCardNumber);
     if (!pvcPattern.test(sanitizedPVC)) {
-      notifyError("Enter a valid Permanent Voter Card (PVC) number using letters and numbers only.");
+      notifyError("Enter a Permanent Voter Card (PVC) that starts with one letter followed by two digits.");
       return;
     }
     if (!trimmedAddress || trimmedAddress.length < 10) {
@@ -400,11 +418,11 @@ export default function Register() {
                       <input
                         id="nationalId"
                         inputMode="numeric"
-                        maxLength={11}
+                        maxLength={5}
                         className="form-control border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:ring-indigo-200"
                         value={nationalId}
-                        onChange={(e) => setNationalId(e.target.value.replace(/[^0-9]/g, ""))}
-                        placeholder="11 digits"
+                        onChange={(e) => setNationalId(e.target.value.replace(/[^0-9]/g, "").slice(0, 5))}
+                        placeholder="5 digits"
                       />
                     </div>
                     <div className="space-y-2">
@@ -413,8 +431,8 @@ export default function Register() {
                         id="pvc"
                         className="form-control border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:ring-indigo-200 uppercase"
                         value={voterCardNumber}
-                        onChange={(e) => setVoterCardNumber(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
-                        placeholder="Enter PVC"
+                        onChange={(e) => setVoterCardNumber(formatPvcInput(e.target.value))}
+                        placeholder="Format: A12"
                       />
                     </div>
                   </div>

@@ -1,8 +1,8 @@
 const NAME_PART_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿ.'-]{2,60}$/;
 const FULL_NAME_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿ.' -]{3,120}$/;
 const PHONE_PATTERN = /^[0-9+()\s-]{7,20}$/;
-const NATIONAL_ID_PATTERN = /^[0-9]{11}$/;
-const PVC_PATTERN = /^[A-Z0-9]{8,20}$/;
+const NATIONAL_ID_PATTERN = /^[0-9]{5}$/;
+const PVC_PATTERN = /^[A-Za-z][0-9]{2}$/;
 const ALLOWED_GENDERS = new Set(["male", "female", "non-binary", "prefer-not-to-say"]);
 const REQUIRED_PROFILE_FIELDS = [
   "firstName",

@@ -118,12 +118,12 @@ router.post("/register", async (req, res) => {
 
     const sanitizedNationalId = String(nationalId).replace(/\s+/g, "");
     if (!NATIONAL_ID_PATTERN.test(sanitizedNationalId)) {
-      return res.status(400).json({ error: "INVALID_NIN", message: "National Identification Number must be 11 digits." });
+      return res.status(400).json({ error: "INVALID_NIN", message: "National Identification Number must be 5 digits." });
     }
 
     const sanitizedVoterCard = String(voterCardNumber).replace(/\s+/g, "").toUpperCase();
     if (!PVC_PATTERN.test(sanitizedVoterCard)) {
-      return res.status(400).json({ error: "INVALID_PVC", message: "Permanent Voter Card number must use only letters and numbers (8-20 characters)." });
+      return res.status(400).json({ error: "INVALID_PVC", message: "Permanent Voter Card number must start with one letter followed by two digits." });
     }
 
     const safeAddress = normalizeAddress(residenceAddress);

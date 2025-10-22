@@ -7,8 +7,8 @@ import { notifyError, notifySuccess } from "../components/Toast";
 
 const NAME_PART_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿ.'-]{2,60}$/;
 const PHONE_PATTERN = /^[0-9+()\s-]{7,20}$/;
-const NATIONAL_ID_PATTERN = /^[0-9]{11}$/;
-const PVC_PATTERN = /^[A-Z0-9]{8,20}$/;
+const NATIONAL_ID_PATTERN = /^[0-9]{5}$/;
+const PVC_PATTERN = /^[A-Z][0-9]{2}$/;
 const GENDER_OPTIONS = [
   { value: "male", label: "Male" },
   { value: "female", label: "Female" },
@@ -44,6 +44,24 @@ export default function CompleteProfile() {
     nationality: "Nigerian",
   });
 
+  const formatPvcInput = (value) => {
+    const raw = (value || "").toUpperCase();
+    const filtered = raw.replace(/[^A-Z0-9]/g, "");
+    let letter = "";
+    let digits = "";
+    for (const ch of filtered) {
+      if (!letter && /[A-Z]/.test(ch)) {
+        letter = ch;
+        continue;
+      }
+      if (/[0-9]/.test(ch) && digits.length < 2) {
+        digits += ch;
+      }
+      if (letter && digits.length === 2) break;
+    }
+    return letter + digits;
+  };
+
   const lgasForState = useMemo(() => {
     const entry = statesData.find((item) => item.state === form.state);
     return entry?.lgas || [];
@@ -57,7 +75,7 @@ export default function CompleteProfile() {
       ["Gender", existingProfile.gender ? existingProfile.gender.replace(/\b\w/g, (c) => c.toUpperCase()) : ""],
       ["Date of birth", existingProfile.dateOfBirth ? existingProfile.dateOfBirth.slice(0, 10) : ""],
       ["National ID (NIN)", existingProfile.nationalId],
-      ["Voter card number", existingProfile.voterCardNumber],
+      ["Voter card number", formatPvcInput(existingProfile.voterCardNumber || "")],
       ["Residence address", existingProfile.residenceAddress],
       ["State", existingProfile.state],
       ["Local government", existingProfile.residenceLGA],
@@ -90,7 +108,7 @@ export default function CompleteProfile() {
           gender: (profile.gender || "").toLowerCase(),
           dateOfBirth: profile.dateOfBirth ? profile.dateOfBirth.slice(0, 10) : "",
           nationalId: profile.nationalId || "",
-          voterCardNumber: profile.voterCardNumber || "",
+          voterCardNumber: formatPvcInput(profile.voterCardNumber || ""),
           residenceAddress: profile.residenceAddress || "",
           state: profile.state || "",
           residenceLGA: profile.residenceLGA || "",
@@ -150,12 +168,12 @@ export default function CompleteProfile() {
     }
     const nin = form.nationalId.replace(/\s+/g, "");
     if (!NATIONAL_ID_PATTERN.test(nin)) {
-      notifyError("Enter your 11-digit National Identification Number (NIN).");
+      notifyError("Enter your 5-digit National Identification Number (NIN).");
       return false;
     }
-    const pvc = form.voterCardNumber.trim().toUpperCase().replace(/\s+/g, "");
+    const pvc = formatPvcInput(form.voterCardNumber);
     if (!PVC_PATTERN.test(pvc)) {
-      notifyError("Enter a valid Permanent Voter Card number (letters and numbers only).");
+      notifyError("Enter a Permanent Voter Card number that starts with one letter followed by two digits.");
       return false;
     }
     const address = form.residenceAddress.trim();
@@ -190,7 +208,7 @@ export default function CompleteProfile() {
         gender: form.gender,
         dateOfBirth: form.dateOfBirth,
         nationalId: form.nationalId.replace(/\s+/g, ""),
-        voterCardNumber: form.voterCardNumber.trim().toUpperCase().replace(/\s+/g, ""),
+        voterCardNumber: formatPvcInput(form.voterCardNumber),
         residenceAddress: form.residenceAddress.trim(),
         state: form.state,
         residenceLGA: form.residenceLGA,
@@ -314,11 +332,11 @@ export default function CompleteProfile() {
                 <input
                   id="nin"
                   inputMode="numeric"
-                  maxLength={11}
+                  maxLength={5}
                   className="form-control"
                   value={form.nationalId}
-                  onChange={(e) => handleChange("nationalId", e.target.value.replace(/[^0-9]/g, ""))}
-                  placeholder="11 digits"
+                  onChange={(e) => handleChange("nationalId", e.target.value.replace(/[^0-9]/g, "").slice(0, 5))}
+                  placeholder="5 digits"
                 />
               </div>
               <div>
@@ -327,8 +345,8 @@ export default function CompleteProfile() {
                   id="pvc"
                   className="form-control uppercase"
                   value={form.voterCardNumber}
-                  onChange={(e) => handleChange("voterCardNumber", e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
-                  placeholder="Letters and numbers only"
+                  onChange={(e) => handleChange("voterCardNumber", formatPvcInput(e.target.value))}
+                  placeholder="Format: A12"
                 />
               </div>
             </div>
