@@ -687,8 +687,9 @@ router.get("/audit-logs/export", requireAuth, requireRole(["super-admin"]), asyn
        LIMIT 1000`,
       params
     );
+    const formatted = formatAuditRows(rows || []);
     const header = "id,actorId,actorRole,action,entityType,entityId,beforeState,afterState,ip,notes,createdAt\n";
-    const csv = header + rows.map((r) => [
+    const csv = header + formatted.map((r) => [
       csvEscape(r.id ?? ""),
       csvEscape(r.actorId ?? ""),
       csvEscape(r.actorRole || ""),
