@@ -6,34 +6,34 @@ import { notifyError } from "../components/Toast";
 
 const heroSlides = [
   {
-    eyebrow: "National mandate",
-    title: "Deliver credible elections from a single command platform.",
-    description: "Coordinate federal, state, and local results with provable integrity, built for election commissions and government partners.",
+    eyebrow: "Built with commissions",
+    title: "Run each election with calm, predictable tools.",
+    description: "Returning officers track accreditation, logistics, and final reporting without juggling spreadsheets or late-night phone trees.",
     highlights: [
-      "Full compliance with national electoral regulations across all regions.",
-      "Chain-of-custody dashboards for ballots, observers, and result forms.",
+      "Clear checklists for pre-election tasks, down to warehouse dispatch notes.",
+      "One workspace for headquarters, state offices, and field teams to keep in sync.",
     ],
     gradient: "from-indigo-100 via-sky-50 to-white",
     accent: "bg-indigo-500",
   },
   {
-    eyebrow: "Command visibility",
-    title: "Track turnout and infrastructure readiness as it happens.",
-    description: "National situation rooms monitor live participation, logistics, and security escalation pathways on one synchronized map.",
+    eyebrow: "Real-time insight",
+    title: "See turnout and issues while they can still be fixed.",
+    description: "Situation rooms get the same live map as supervisors in the field, with a simple way to log incidents and track follow-up.",
     highlights: [
-      "State-by-state turnout heat maps with historic baselines.",
-      "Automated anomaly alerts and incident workflows for rapid response.",
+      "Turnout reports that surface lagging wards before the day slips away.",
+      "Escalation paths that show who picked up an issue and what changed on site.",
     ],
     gradient: "from-emerald-100 via-teal-50 to-white",
     accent: "bg-emerald-500",
   },
   {
-    eyebrow: "Inclusive access",
-    title: "Every citizen guided securely from registration to results.",
-    description: "Multilingual portals, diaspora support, and accessibility-first flows make the national ballot available to every eligible voter.",
+    eyebrow: "Access for everyone",
+    title: "Guide voters from registration through results day.",
+    description: "Citizens can check their status, find their polling unit, and follow verified announcements without guesswork or rumours.",
     highlights: [
-      "Progressive verification for citizens at home and abroad.",
-      "Accessibility compliance for assistive technologies and rural bandwidth.",
+      "Responsive design that works on basic smartphones and low-bandwidth connections.",
+      "Support scripts for call-centre agents answering voter questions in multiple languages.",
     ],
     gradient: "from-rose-100 via-fuchsia-50 to-white",
     accent: "bg-rose-500",
@@ -42,38 +42,38 @@ const heroSlides = [
 
 const strategicPillars = [
   {
-    title: "Identity assurance",
-    body: "Integrate national ID registries, diaspora rolls, and observer whitelists with layered verification and audit trails.",
+    title: "Identity reassurance",
+    body: "Use the data you already trust — national ID, enrolment drives, and observer rosters — with layered checks that flag gaps before they become disputes.",
   },
   {
-    title: "Resilient operations",
-    body: "Geo-redundant infrastructure, end-to-end encryption, and adaptive rate limiting maintain uptime under election-day load.",
+    title: "Steady operations",
+    body: "We mirror infrastructure across regions, encrypt data in transit and at rest, and monitor capacity so election-day surges feel like any other workday.",
   },
   {
-    title: "Transparent accountability",
-    body: "Realtime reconciliation reports, observer dashboards, and exportable audit packs satisfy domestic and international oversight.",
+    title: "Open reporting",
+    body: "Every action leaves a trail. Commissioners can download the same reconciliation packs shared with observers and oversight missions.",
   },
 ];
 
 const deliverySteps = [
-  { title: "Calibrate the election", detail: "Set the national calendar, map constituencies, and onboard central and state administrators." },
-  { title: "Accredit officials & voters", detail: "Synchronise national ID, diaspora, and observer lists with automated notifications and reminders." },
-  { title: "Coordinate election day", detail: "Monitor turnout, logistics, and security signals while resolving incidents through SOP playbooks." },
-  { title: "Declare & archive", detail: "Publish certified results, lodge requisite forms, and hand audit evidence to oversight bodies." },
+  { title: "Plan the ground work", detail: "Confirm timelines, upload constituency data, and invite colleagues who will administer each stage." },
+  { title: "Prepare people and materials", detail: "Track accreditation progress, logistics, and training attendance with reminders that go out automatically." },
+  { title: "Run election day together", detail: "Log issues, assign responders, and watch turnout trends without leaving the command dashboard." },
+  { title: "Close out with confidence", detail: "Publish certified results, notify voters, and export evidence packs for auditors and tribunals." },
 ];
 
 const capabilityBlocks = [
   {
     title: "Unified command centre",
-    description: "National, state, and LGA dashboards share turnout, incidents, and escalations in real time with role-based controls.",
+    description: "HQ, state, and LGA teams share the same dashboard for turnout, incidents, and escalations. Permissions keep sensitive data with the right people.",
   },
   {
-    title: "Electoral data governance",
-    description: "Retention policies, legal holds, and anonymisation schedules uphold statutory requirements and privacy mandates.",
+    title: "Practical data governance",
+    description: "Retention policies, legal holds, and export limits are baked in so legal and compliance teams can sign off without extra tooling.",
   },
   {
     title: "Interoperable services",
-    description: "REST and socket APIs integrate with call centres, SMS gateways, accreditation devices, and observer portals.",
+    description: "REST and socket APIs plug into call centres, SMS gateways, accreditation devices, and observer portals you already operate.",
   },
 ];
 
@@ -238,20 +238,20 @@ export default function Home() {
                 <div className="relative overflow-hidden rounded-3xl border border-white/70 bg-white/80 p-6 shadow-2xl backdrop-blur">
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
                     <span>Election control room</span>
-                    <span>Live</span>
+                    <span>Demo view</span>
                   </div>
                   <div className="mt-6 grid gap-5">
                     <div>
-                      <p className="text-sm font-semibold text-slate-700">Participation today</p>
-                      <p className="mt-2 text-3xl font-semibold text-slate-900">82%</p>
-                      <p className="text-xs text-slate-500">Projected close at 87%</p>
+                      <p className="text-sm font-semibold text-slate-700">Turnout update</p>
+                      <p className="mt-2 text-3xl font-semibold text-slate-900">52%</p>
+                      <p className="text-xs text-slate-500">Demo data from our training environment.</p>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       {[
-                        { label: "Ballots in the last hour", value: "12,498" },
-                        { label: "Support chats resolved", value: "94%" },
-                        { label: "Integrity alerts", value: "0" },
-                        { label: "Average response time", value: "1m 42s" },
+                        { label: "Ballots checked in last hour", value: "1,245" },
+                        { label: "Issues resolved today", value: "38" },
+                        { label: "Open incident queues", value: "3" },
+                        { label: "Average response time", value: "2m 11s" },
                       ].map((item) => (
                         <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
                           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">{item.label}</p>
@@ -262,7 +262,7 @@ export default function Home() {
                     <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
                       <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Next milestone</p>
                       <p className="mt-2 text-slate-700">
-                        Results publication window opens at 20:00 UTC with voter notifications primed.
+                        Results window opens at 20:00 once all constituency results are signed off by returning officers.
                       </p>
                     </div>
                   </div>
@@ -274,10 +274,10 @@ export default function Home() {
           <section className="border-b border-slate-200 bg-white">
             <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-8 px-4 py-10 sm:px-6 lg:px-10">
               {[
-                { value: "80M+", label: "Registered voters supported nationwide" },
-                { value: "36", label: "States & FCT synchronized in real time" },
-                { value: "176k", label: "Polling units monitored end-to-end" },
-                { value: "99.98%", label: "Election week platform availability" },
+                { value: "6 nationwide projects", label: "Delivered with electoral partners since 2021" },
+                { value: "12,400", label: "Polling staff onboarded through guided training" },
+                { value: "18 hrs", label: "Average time to publish signed constituency results" },
+                { value: "24/7", label: "Support coverage throughout election week" },
               ].map((stat) => (
                 <div key={stat.label} className="flex flex-col">
                   <span className="text-3xl font-semibold text-slate-900 sm:text-4xl">{stat.value}</span>
@@ -292,12 +292,12 @@ export default function Home() {
               <div className="mb-10 flex flex-col gap-4 text-slate-600 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <span className="inline-flex w-fit items-center gap-2 rounded-full bg-indigo-50 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">
-                    Platform pillars
+                    What the platform covers
                   </span>
-                  <h2 className="mt-4 text-3xl font-semibold text-slate-900 sm:text-4xl">The digital backbone for national election delivery.</h2>
+                  <h2 className="mt-4 text-3xl font-semibold text-slate-900 sm:text-4xl">All the working parts you need from registration day to declaration night.</h2>
                 </div>
                 <p className="max-w-lg text-sm sm:text-base">
-                  From identity assurance to declaration night, each module reinforces trust for federal election commissions and their partners.
+                  Each pillar wraps the routine work election teams already do. We simply keep it organised, auditable, and shareable with partners who rely on the same information.
                 </p>
               </div>
               <div className="grid gap-6 md:grid-cols-3">
@@ -319,7 +319,7 @@ export default function Home() {
                 </span>
                 <h2 className="text-3xl font-semibold text-slate-900 sm:text-4xl">From concept to certified results in four stages.</h2>
                 <p className="text-base text-slate-600">
-                  Proven government playbooks pair technology with policy guidance, ensuring each stage aligns with constitutional and INEC/commission directives.
+                  We build on the directives your commission already follows, pairing the software with checklists, templates, and policy sign-offs that survive scrutiny.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3 text-sm text-indigo-600">
                   <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-2">
@@ -352,9 +352,9 @@ export default function Home() {
             <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-10">
               <div className="mb-10 flex flex-col gap-4">
                 <span className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
-                  Operational excellence
+                  Built for long days
                 </span>
-                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Capabilities designed for resilient national ballots.</h3>
+                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Tools we’ve hardened for the busiest moments of an election.</h3>
               </div>
               <div className="grid gap-6 lg:grid-cols-3">
                 {capabilityBlocks.map((item) => (
@@ -373,23 +373,23 @@ export default function Home() {
                 <span className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-4 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-600">
                   Partnership first
                 </span>
-                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">Expert support from voter registration to national declaration.</h3>
+                <h3 className="text-3xl font-semibold text-slate-900 sm:text-4xl">People who stay with you from registration to declaration night.</h3>
                 <p className="text-base text-slate-600">
-                  National support centres, regional command rooms, and international observers rely on our joint operations team for guidance at every critical phase.
+                  Our operations group works alongside commissioners, security agencies, and observer missions so no one is guessing what happens next.
                 </p>
               </div>
               <div className="grid gap-4 text-sm text-slate-600">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">Advisory</span>
-                  <p className="mt-2 text-base text-slate-900">Dedicated electoral operations strategists embedded with your commission and security services.</p>
+                  <p className="mt-2 text-base text-slate-900">Weekly working sessions to surface risks, share checklists, and coordinate with security and logistics leads.</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">Training</span>
-                  <p className="mt-2 text-base text-slate-900">Role-based walkthroughs for commissioners, returning officers, call-centre agents, and observers nationwide.</p>
+                  <p className="mt-2 text-base text-slate-900">Role-based walkthroughs and printable job aids for commissioners, returning officers, call-centre teams, and observers.</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">Continuity</span>
-                  <p className="mt-2 text-base text-slate-900">Post-election audits, lessons learned, and readiness programmes for subsequent electoral cycles.</p>
+                  <p className="mt-2 text-base text-slate-900">Post-election reviews, evidence archiving, and readiness drills that set up the next cycle for success.</p>
                 </div>
               </div>
             </div>

@@ -547,6 +547,30 @@ router.post("/users/:id/role", requireAuth, requireRole(["super-admin"]), async 
 const LOG_COLUMNS = "id,method,path,userId,ip,statusCode,durationMs,queryParams,bodyParams,country,city,userAgent,referer,createdAt";
 const LOG_LIMIT = 100;
 
+const stringifyJsonColumn = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  if (Buffer.isBuffer(value)) {
+    try {
+      return value.toString("utf8");
+    } catch {
+      return value.toString();
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const formatAuditRows = (rows = []) =>
+  rows.map((row) => ({
+    ...row,
+    beforeState: stringifyJsonColumn(row.beforeState),
+    afterState: stringifyJsonColumn(row.afterState),
+  }));
+
 const csvEscape = (value) => {
   if (value === null || value === undefined) return '""';
   const str = String(value);
@@ -630,7 +654,7 @@ router.get("/audit-logs", requireAuth, requireRole(["super-admin"]), async (req,
        LIMIT 200`,
       params
     );
-    res.json(rows || []);
+    res.json(formatAuditRows(rows) || []);
   } catch (err) {
     console.error("admin/audit-logs:", err);
     res.status(500).json({ error: "SERVER" });
