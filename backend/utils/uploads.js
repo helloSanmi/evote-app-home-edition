@@ -4,9 +4,13 @@ const path = require("path");
 const resolveRoot = () => {
   const customRoot = process.env.UPLOAD_ROOT;
   if (customRoot) {
-    const absolute = path.isAbsolute(customRoot) ? customRoot : path.resolve(process.cwd(), customRoot);
-    fs.mkdirSync(absolute, { recursive: true });
-    return absolute;
+    try {
+      const absolute = path.isAbsolute(customRoot) ? customRoot : path.resolve(process.cwd(), customRoot);
+      fs.mkdirSync(absolute, { recursive: true });
+      return absolute;
+    } catch (err) {
+      console.warn(`[uploads] Failed to prepare custom UPLOAD_ROOT (${customRoot}): ${err?.message || err}. Falling back to default ./backend/uploads.`);
+    }
   }
   const fallback = path.join(__dirname, "..", "uploads");
   fs.mkdirSync(fallback, { recursive: true });
