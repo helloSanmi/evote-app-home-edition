@@ -1,10 +1,9 @@
 // backend/routes/user.js
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
 const multer = require("multer");
 const { q, one } = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
 
 const router = express.Router();
 
@@ -57,14 +56,14 @@ router.put("/profile", requireAuth, async (req, res) => {
 
 /* ------------------------------- Avatar upload ------------------------------ */
 
-const avatarDir = path.join(__dirname, "..", "uploads", "avatars");
-fs.mkdirSync(avatarDir, { recursive: true });
+const avatarDir = ensureDirSync("avatars");
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, avatarDir),
   filename: (_req, file, cb) => {
-    const ext = (path.extname(file.originalname || "") || "").toLowerCase();
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+    const ext = ((file.originalname || "").toLowerCase().split(".").pop() || "").replace(/[^a-z0-9]/g, "");
+    const suffix = ext ? `.${ext}` : "";
+    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${suffix}`);
   },
 });
 const upload = multer({
@@ -80,7 +79,7 @@ const upload = multer({
 router.post("/upload-avatar", requireAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file" });
-    const url = `/uploads/avatars/${req.file.filename}`;
+    const url = buildPublicPath("avatars", req.file.filename);
     await q(`UPDATE Users SET profilePhoto=? WHERE id=?`, [url, req.user.id]);
     res.json({ success: true, url });
   } catch (e) {

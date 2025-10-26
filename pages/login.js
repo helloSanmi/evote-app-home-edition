@@ -7,6 +7,7 @@ import { notifyError, notifySuccess } from "../components/Toast";
 import { reidentifySocket } from "../lib/socket";
 import LoadingCurtain from "../components/LoadingCurtain";
 import GoogleAuthButton from "../components/GoogleAuthButton";
+import MicrosoftAuthButton from "../components/MicrosoftAuthButton";
 
 export default function Login() {
   const router = useRouter();
@@ -137,6 +138,27 @@ export default function Login() {
     }
   };
 
+  const handleMicrosoftToken = async (idToken) => {
+    if (!idToken) return;
+    setBusy(true);
+    setAccountDisabled(null);
+    try {
+      const data = await apiPost("/api/auth/microsoft", { idToken });
+      await finishLogin(data, "Signed in with Microsoft");
+      return;
+    } catch (err) {
+      if (err?.code === "ACCOUNT_DISABLED") {
+        setAccountDisabled({
+          message: err.message || "This account is currently disabled. Reactivate it to continue.",
+        });
+        setBusy(false);
+        return;
+      }
+      notifyError(err.message || "Microsoft sign in failed");
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <div className="flex min-h-screen items-center bg-slate-100">
@@ -218,8 +240,9 @@ export default function Login() {
                   </button>
                 </form>
 
-                <div className="mt-6">
+                <div className="mt-6 space-y-4">
                   <GoogleAuthButton onCredential={handleGoogleCredential} text="Continue with Google" disabled={busy} />
+                  <MicrosoftAuthButton onToken={handleMicrosoftToken} disabled={busy} />
                 </div>
 
                 <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">

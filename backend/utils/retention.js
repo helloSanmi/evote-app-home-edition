@@ -4,10 +4,11 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { q } = require("../db");
 const { recordAuditEvent } = require("./audit");
+const { ensureDirSync, uploadRoot } = require("./uploads");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const PROFILE_DIR = path.join(__dirname, "..", "uploads", "profile");
-const CANDIDATE_DIR = path.join(__dirname, "..", "uploads", "candidates");
+const PROFILE_DIR = ensureDirSync("profile");
+const CANDIDATE_DIR = ensureDirSync("candidates");
 
 function safeUnlink(filePath) {
   try {
@@ -101,7 +102,7 @@ async function hardDeleteUser(user, { reason = "retention" } = {}) {
   try {
     if (user.profilePhoto && user.profilePhoto.startsWith("/uploads/")) {
       const relative = user.profilePhoto.replace("/uploads/", "");
-      const localPath = path.join(__dirname, "..", "uploads", relative);
+      const localPath = path.join(uploadRoot, relative);
       safeUnlink(localPath);
     }
   } catch (err) {

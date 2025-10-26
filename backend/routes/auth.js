@@ -1,6 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { createRemoteJWKSet, jwtVerify } = require("jose");
 const crypto = require("node:crypto");
 const { q } = require("../db");
 const { requireAuth } = require("../middleware/auth");
@@ -58,6 +59,90 @@ function decodeGoogleToken(idToken) {
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,40}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const AZURE_TENANT_ID = (process.env.AZURE_AD_TENANT_ID || "").trim();
+const AZURE_CLIENT_ID = (process.env.AZURE_AD_CLIENT_ID || "").trim();
+const parseList = (value = "") =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+const toLowerSet = (list = []) => new Set(list.map((value) => value.toLowerCase()));
+const DEFAULT_SUPER_ROLE_IDS = ["62e90394-69f5-4237-9190-012177145e10"];
+const azureSuperRoleIds = toLowerSet([...DEFAULT_SUPER_ROLE_IDS, ...parseList(process.env.AZURE_AD_SUPER_ADMIN_IDS || process.env.AZURE_AD_SUPER_ADMIN_ROLE_IDS || "")]);
+const azureAdminRoleIds = toLowerSet(parseList(process.env.AZURE_AD_ADMIN_IDS || process.env.AZURE_AD_ADMIN_ROLE_IDS || ""));
+const azureSuperRoleNames = toLowerSet(["company administrator", "global administrator", ...parseList(process.env.AZURE_AD_SUPER_ADMIN_ROLE_NAMES || "")]);
+const azureAdminRoleNames = toLowerSet(parseList(process.env.AZURE_AD_ADMIN_ROLE_NAMES || ""));
+const azureSuperEmails = toLowerSet(parseList(process.env.AZURE_AD_SUPER_ADMIN_EMAILS || ""));
+const azureAdminEmails = toLowerSet(parseList(process.env.AZURE_AD_ADMIN_EMAILS || ""));
+
+let azureJwks = null;
+const getAzureJwks = () => {
+  if (!azureJwks) {
+    if (!AZURE_TENANT_ID) throw new Error("AZURE_AD_TENANT_ID not configured");
+    azureJwks = createRemoteJWKSet(new URL(`https://login.microsoftonline.com/${AZURE_TENANT_ID}/discovery/v2.0/keys`));
+  }
+  return azureJwks;
+};
+
+const flattenLower = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => flattenLower(item));
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap((item) => flattenLower(item));
+  }
+  return [String(value).toLowerCase()];
+};
+
+const ROLE_PRIORITY = { user: 1, admin: 2, "super-admin": 3 };
+
+async function verifyMicrosoftIdToken(idToken) {
+  if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID) {
+    throw new Error("MICROSOFT_NOT_CONFIGURED");
+  }
+  const { payload } = await jwtVerify(idToken, getAzureJwks(), {
+    issuer: `https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0`,
+    audience: AZURE_CLIENT_ID,
+  });
+  const tenant = (payload.tid || payload.tenantId || "").toLowerCase();
+  if (tenant && AZURE_TENANT_ID && tenant !== AZURE_TENANT_ID.toLowerCase()) {
+    throw new Error("TOKEN_TENANT_MISMATCH");
+  }
+  return payload;
+}
+
+function deriveAzureRole(payload = {}, emailLower = "") {
+  const widValues = flattenLower(payload.wids);
+  if (widValues.some((id) => azureSuperRoleIds.has(id))) return "super-admin";
+  if (widValues.length && (azureAdminRoleIds.size === 0 || widValues.some((id) => azureAdminRoleIds.has(id)))) return "admin";
+
+  const rawRoleClaims = [
+    payload.roles,
+    payload.role,
+    payload["http://schemas.microsoft.com/ws/2008/06/identity/claims/role"],
+    payload["http://schemas.microsoft.com/ws/2008/06/identity/claims/roles"],
+  ];
+  const roleNames = flattenLower(rawRoleClaims);
+  const normalizedRoleTokens = new Set(roleNames.map((name) => name.replace(/[^a-z]/g, "")));
+
+  if (normalizedRoleTokens.has("companyadministrator") || normalizedRoleTokens.has("globaladministrator")) {
+    return "super-admin";
+  }
+
+  if (roleNames.some((name) => azureSuperRoleNames.has(name))) return "super-admin";
+  if (roleNames.some((name) => azureAdminRoleNames.has(name))) return "admin";
+  if (roleNames.some((name) => name.includes("global administrator") || name.includes("company administrator"))) {
+    return "super-admin";
+  }
+  if (roleNames.some((name) => name.includes("admin"))) return "admin";
+
+  if (emailLower) {
+    if (azureSuperEmails.has(emailLower)) return "super-admin";
+    if (azureAdminEmails.has(emailLower)) return "admin";
+  }
+
+  return widValues.length ? "admin" : "user";
+}
 
 // Register
 router.post("/register", async (req, res) => {
@@ -393,6 +478,8 @@ router.post("/google", async (req, res) => {
       await q(`UPDATE Users SET eligibilityStatus='active' WHERE id=?`, [user.id]);
       user.eligibilityStatus = "active";
     }
+    user.role = role;
+    user.isAdmin = isAdmin ? 1 : 0;
     const token = sign({ ...user, role });
     const isAdmin = role === "admin" || role === "super-admin";
     await q(`UPDATE Users SET lastLoginAt=UTC_TIMESTAMP() WHERE id=?`, [user.id]);
@@ -424,6 +511,178 @@ router.post("/google", async (req, res) => {
     const friendly = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED/i.test(rawMessage)
       ? "Unable to reach Google to verify the credential. Check your network connection or client ID configuration."
       : rawMessage;
+    res.status(500).json({ error: "SERVER", message: friendly });
+  }
+});
+
+router.post("/microsoft", async (req, res) => {
+  try {
+    const idToken = req.body?.idToken;
+    if (typeof idToken !== "string" || !idToken.trim()) {
+      return res.status(400).json({ error: "MISSING_TOKEN", message: "Missing Microsoft credential" });
+    }
+    if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID) {
+      return res.status(500).json({ error: "SERVER", message: "Microsoft sign-in not configured" });
+    }
+    const payload = await verifyMicrosoftIdToken(idToken.trim());
+    const email = (payload.preferred_username || payload.email || payload.upn || "").toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: "INVALID_PROFILE", message: "Microsoft profile missing an email address" });
+    }
+    const microsoftId = (payload.oid || payload.sub || "").toLowerCase() || null;
+    const displayName = payload.name || payload.displayName || email;
+    const { first: derivedFirst, last: derivedLast, full: derivedFull } = deriveNameParts(displayName);
+    const fullName = derivedFull || displayName;
+    const azureRole = deriveAzureRole(payload, email);
+
+    let user = null;
+    if (microsoftId) {
+      [[user]] = await q(`SELECT * FROM Users WHERE microsoftId=? LIMIT 1`, [microsoftId]);
+    }
+    if (!user) {
+      [[user]] = await q(`SELECT * FROM Users WHERE email=? LIMIT 1`, [email]);
+    }
+
+    if (!user) {
+      const randomPassword = crypto.randomBytes(18).toString("hex");
+      const hash = await bcrypt.hash(randomPassword, 10);
+      const baseUsername = email.split("@")[0].replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 40) || "user";
+      let preferred = baseUsername.slice(0, 60);
+      let suffix = 1;
+      while (true) {
+        const [[existingUsername]] = await q(`SELECT id FROM Users WHERE username=?`, [preferred]);
+        if (!existingUsername) break;
+        preferred = `${baseUsername}${suffix}`.slice(0, 60);
+        suffix += 1;
+      }
+      const roleForInsert = azureRole || "user";
+      const isAdminFlag = roleForInsert === "admin" || roleForInsert === "super-admin" ? 1 : 0;
+      const [result] = await q(
+        `INSERT INTO Users (fullName, firstName, lastName, username, email, password, eligibilityStatus, hasVoted, isAdmin, role, profilePhoto, googleId, microsoftId)
+         VALUES (?,?,?,?,?, ?, 'pending',0,?, ?, ?, NULL, ?)`,
+        [
+          fullName,
+          derivedFirst || null,
+          derivedLast || null,
+          preferred,
+          email,
+          hash,
+          isAdminFlag,
+          roleForInsert,
+          null,
+          microsoftId,
+        ]
+      );
+      const insertedId = result.insertId;
+      [[user]] = await q(`SELECT * FROM Users WHERE id=?`, [insertedId]);
+    } else {
+      const updates = [];
+      const params = [];
+      if (microsoftId && user.microsoftId !== microsoftId) {
+        updates.push("microsoftId=?");
+        params.push(microsoftId);
+      }
+      if (fullName && user.fullName !== fullName) {
+        updates.push("fullName=?");
+        params.push(fullName);
+      }
+      if (derivedFirst && !user.firstName) {
+        updates.push("firstName=?");
+        params.push(derivedFirst);
+      }
+      if (derivedLast && !user.lastName) {
+        updates.push("lastName=?");
+        params.push(derivedLast);
+      }
+      if (!user.email && email) {
+        updates.push("email=?");
+        params.push(email);
+      }
+      const status = (user.eligibilityStatus || "").toLowerCase();
+      if (status !== "active" && status !== "disabled") {
+        updates.push("eligibilityStatus='active'");
+      }
+      if (updates.length) {
+        const setClause = updates.join(", ");
+        await q(`UPDATE Users SET ${setClause} WHERE id=?`, [...params, user.id]);
+        [[user]] = await q(`SELECT * FROM Users WHERE id=?`, [user.id]);
+      }
+    }
+
+    let targetRole = (user.role || "user").toLowerCase();
+    if (ROLE_PRIORITY[azureRole] > (ROLE_PRIORITY[targetRole] || 0)) {
+      targetRole = azureRole;
+    }
+    if (targetRole !== (user.role || "").toLowerCase()) {
+      await q(`UPDATE Users SET role=?, isAdmin=? WHERE id=?`, [targetRole, targetRole === "admin" || targetRole === "super-admin" ? 1 : 0, user.id]);
+      [[user]] = await q(`SELECT * FROM Users WHERE id=?`, [user.id]);
+    }
+
+    const normalizedRole = normalizeRole(user);
+    if (user.role !== normalizedRole) {
+      await q(`UPDATE Users SET role=?, isAdmin=? WHERE id=?`, [normalizedRole, normalizedRole === "admin" || normalizedRole === "super-admin" ? 1 : 0, user.id]);
+      [[user]] = await q(`SELECT * FROM Users WHERE id=?`, [user.id]);
+    }
+
+    if (user.deletedAt) {
+      return res.status(403).json({
+        error: "ACCOUNT_PENDING_DELETION",
+        message: "This account is scheduled for deletion. Restore it within 30 days to continue.",
+        purgeAt: user.purgeAt,
+      });
+    }
+    const status = (user.eligibilityStatus || "").toLowerCase();
+    if (status === "disabled") {
+      return res.status(423).json({
+        error: "ACCOUNT_DISABLED",
+        message: "This account is currently disabled. Reactivate it to continue.",
+        reactivate: true,
+      });
+    }
+    if (status !== "active" && status !== "disabled") {
+      await q(`UPDATE Users SET eligibilityStatus='active' WHERE id=?`, [user.id]);
+      user.eligibilityStatus = "active";
+    }
+    const role = normalizeRole(user);
+    const token = sign({ ...user, role });
+    const isAdmin = role === "admin" || role === "super-admin";
+    await q(`UPDATE Users SET lastLoginAt=UTC_TIMESTAMP() WHERE id=?`, [user.id]);
+    await recordAuditEvent({
+      actorId: user.id,
+      actorRole: role,
+      action: "auth.login.microsoft",
+      entityType: "user",
+      entityId: String(user.id),
+      ip: req.ip || null,
+    });
+    const completionRequired = requiresProfileCompletion(user);
+    res.json({
+      token,
+      userId: user.id,
+      username: user.username,
+      fullName: user.fullName || user.username,
+      firstName: user.firstName || null,
+      lastName: user.lastName || null,
+      role,
+      isAdmin,
+      profilePhoto: user.profilePhoto || null,
+      eligibilityStatus: user.eligibilityStatus || null,
+      requiresProfileCompletion: completionRequired,
+    });
+  } catch (err) {
+    if (err?.message === "MICROSOFT_NOT_CONFIGURED") {
+      return res.status(500).json({ error: "SERVER", message: "Microsoft sign-in not configured" });
+    }
+    if (err?.message === "TOKEN_TENANT_MISMATCH") {
+      return res.status(403).json({ error: "INVALID_TOKEN", message: "Credential issued for a different tenant" });
+    }
+    if (err?.code === "ERR_JWT_EXPIRED") {
+      return res.status(401).json({ error: "TOKEN_EXPIRED", message: "Microsoft credential has expired. Please try again." });
+    }
+    console.error("auth/microsoft:", err);
+    const friendly = err?.message && typeof err.message === "string" && err.message.startsWith("Invalid")
+      ? err.message
+      : "Microsoft sign-in failed";
     res.status(500).json({ error: "SERVER", message: friendly });
   }
 });

@@ -1,6 +1,4 @@
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
 const multer = require("multer");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
@@ -8,6 +6,7 @@ const { q } = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { markAccountForDeletion } = require("../utils/retention");
 const { recordAuditEvent } = require("../utils/audit");
+const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
 const {
   NAME_PART_PATTERN,
   FULL_NAME_PATTERN,
@@ -27,13 +26,13 @@ const {
 // storage: /uploads/profile
 const disk = multer.diskStorage({
   destination: function (_req, _file, cb) {
-    const dir = path.join(__dirname, "..", "uploads", "profile");
-    fs.mkdirSync(dir, { recursive: true });
+    const dir = ensureDirSync("profile");
     cb(null, dir);
   },
   filename: function (_req, file, cb) {
-    const ext = (file.originalname || "").toLowerCase().split(".").pop();
-    const safe = Date.now() + "-" + Math.random().toString(36).slice(2) + "." + ext;
+    const ext = ((file.originalname || "").toLowerCase().split(".").pop() || "").replace(/[^a-z0-9]/g, "");
+    const suffix = ext ? `.${ext}` : "";
+    const safe = `${Date.now()}-${Math.random().toString(36).slice(2)}${suffix}`;
     cb(null, safe);
   }
 });
@@ -135,7 +134,7 @@ router.put("/", requireAuth, async (req, res) => {
 router.post("/photo", requireAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "MISSING_FILE", message: "No file uploaded" });
-    const rel = `/uploads/profile/${req.file.filename}`;
+    const rel = buildPublicPath("profile", req.file.filename);
     await q(`UPDATE Users SET profilePhoto=? WHERE id=?`, [rel, req.user.id]);
     res.json({ success: true, url: rel });
   } catch (e) {

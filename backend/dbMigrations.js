@@ -72,6 +72,17 @@ async function ensureGoogleIdColumn() {
   }
 }
 
+async function ensureMicrosoftIdColumn() {
+  const [[azureColumn]] = await q(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='Users' AND COLUMN_NAME='microsoftId'`
+  );
+  if (!azureColumn) {
+    await q(`ALTER TABLE Users ADD COLUMN microsoftId VARCHAR(64) NULL UNIQUE AFTER googleId`);
+  }
+}
+
 async function ensureIndex(table, indexName, sql) {
   const [[exists]] = await q(
     `SELECT INDEX_NAME
@@ -286,6 +297,7 @@ async function ensureSchema() {
   await ensureRoleColumn();
   await ensureChatStatusColumn();
   await ensureGoogleIdColumn();
+  await ensureMicrosoftIdColumn();
   await ensureIdentityColumns();
   await ensureUserLifecycleColumns();
   await ensureChatTables();

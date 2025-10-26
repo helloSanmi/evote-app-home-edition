@@ -6,7 +6,6 @@ const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const path = require("path");
-const fs = require("fs");
 const http = require("http");
 
 const app = express();
@@ -35,10 +34,11 @@ app.use(attachUserIfAny);
 app.use(require("./middleware/logger")());
 
 // Ensure & serve uploads
-const uploadsRoot = path.join(__dirname, "uploads");
-fs.mkdirSync(path.join(uploadsRoot, "avatars"), { recursive: true });
-fs.mkdirSync(path.join(uploadsRoot, "candidates"), { recursive: true });
-app.use("/uploads", express.static(uploadsRoot));
+const { uploadRoot, ensureDirSync } = require("./utils/uploads");
+ensureDirSync("avatars");
+ensureDirSync("candidates");
+ensureDirSync("profile");
+app.use("/uploads", express.static(uploadRoot));
 
 // Health
 app.get("/api", (_req, res) => res.json({ ok: true, service: "voting-backend" }));

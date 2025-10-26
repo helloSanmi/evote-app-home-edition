@@ -1,6 +1,5 @@
 const express = require("express");
 const router = express.Router();
-const path = require("path");
 const multer = require("multer");
 const bcrypt = require("bcryptjs");
 const { q } = require("../db");
@@ -8,17 +7,22 @@ const { requireAuth, requireAdmin, requireRole } = require("../middleware/auth")
 const { recordAuditEvent } = require("../utils/audit");
 const { hardDeleteUser } = require("../utils/retention");
 const { buildMetricsSnapshot } = require("../utils/telemetry");
+const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
 
 // ---------- candidate image upload ----------
 const upCand = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, path.join(__dirname, "..", "uploads", "candidates")),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`)
+  destination: (_req, _file, cb) => cb(null, ensureDirSync("candidates")),
+  filename: (_req, file, cb) => {
+    const ext = ((file.originalname || "").toLowerCase().split(".").pop() || "").replace(/[^a-z0-9]/g, "");
+    const suffix = ext ? `.${ext}` : "";
+    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${suffix}`);
+  }
 });
 const uploadCand = multer({ storage: upCand, limits: { fileSize: 2 * 1024 * 1024 } });
 
 router.post("/upload-image", requireAuth, requireAdmin, uploadCand.single("file"), async (req, res) => {
   try {
-    const url = `/uploads/candidates/${req.file.filename}`;
+    const url = buildPublicPath("candidates", req.file.filename);
     res.json({ success: true, url });
   } catch { res.status(500).json({ error: "SERVER" }); }
 });
