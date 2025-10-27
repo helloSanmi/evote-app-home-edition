@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import {
   apiGet,
   apiPost,
+  apiPut,
   apiDelete,
   safeJson,
   absUrl,
@@ -14,6 +15,8 @@ import NG from "../public/ng-states-lgas.json";
 import { getSocket } from "../lib/socket";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { mediaUrl } from "../lib/mediaUrl";
+import DateTimePicker from "../components/DateTimePicker";
+import { resolveSessionTiming, formatCountdown } from "../lib/time";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -42,6 +45,7 @@ export default function AdminPage() {
   const statsRef = useRef({ active: 0, upcoming: 0, awaiting: 0 });
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -56,6 +60,8 @@ export default function AdminPage() {
   const [cState, setCState] = useState("");
   const [cLga, setCLga] = useState("");
   const [cPhotoUrl, setCPhotoUrl] = useState("");
+  const [editingCandidate, setEditingCandidate] = useState(null);
+  const [candidateSaving, setCandidateSaving] = useState(false);
 
   const [selPast, setSelPast] = useState(null);
   const [pastCands, setPastCands] = useState([]);
@@ -77,6 +83,31 @@ export default function AdminPage() {
   const [rescheduleStart, setRescheduleStart] = useState("");
   const [rescheduleEnd, setRescheduleEnd] = useState("");
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const defaultEditSessionForm = () => ({
+    title: "",
+    description: "",
+    scope: "national",
+    scopeState: "",
+    scopeLGA: "",
+    minAge: "18",
+    startTime: "",
+    endTime: "",
+  });
+  const [editSessionTarget, setEditSessionTarget] = useState(null);
+  const [editSessionSaving, setEditSessionSaving] = useState(false);
+  const [editSessionForm, setEditSessionForm] = useState(() => defaultEditSessionForm());
+
+  const resetCandidateForm = () => {
+    setCName("");
+    setCPhotoUrl("");
+    setEditingCandidate(null);
+    if (scope === "national") {
+      setCState("");
+      setCLga("");
+    } else if (scope === "state") {
+      setCLga("");
+    }
+  };
   const sessionSteps = useMemo(() => [
     { id: 1, label: "Scope" },
     { id: 2, label: "Details" },
@@ -160,6 +191,11 @@ export default function AdminPage() {
   }, [router]);
 
   useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     loadUnpublished();
     loadSessions();
     loadUsers();
@@ -177,11 +213,17 @@ export default function AdminPage() {
     const handleVote = () => refreshLive();
 
     socket?.on("periodCreated", handleCreated);
+    socket?.on("periodUpdated", handleCreated);
+    socket?.on("periodCancelled", handleCreated);
+    socket?.on("periodEnded", handleCreated);
     socket?.on("resultsPublished", handlePublished);
     socket?.on("voteUpdate", handleVote);
 
     return () => {
       socket?.off("periodCreated", handleCreated);
+      socket?.off("periodUpdated", handleCreated);
+      socket?.off("periodCancelled", handleCreated);
+      socket?.off("periodEnded", handleCreated);
       socket?.off("resultsPublished", handlePublished);
       socket?.off("voteUpdate", handleVote);
     };
@@ -250,11 +292,12 @@ export default function AdminPage() {
   }, []);
 
   const isActive = (period) => {
-    const now = Date.now();
-    return now >= new Date(period.startTime).getTime() && now < new Date(period.endTime).getTime() && !period.resultsPublished;
+    const start = new Date(period.startTime).getTime();
+    const end = new Date(period.endTime).getTime();
+    return currentTime >= start && currentTime < end && !period.resultsPublished;
   };
-  const isUpcoming = (period) => Date.now() < new Date(period.startTime).getTime() && !period.resultsPublished;
-  const awaitingPublish = (period) => Date.now() >= new Date(period.endTime).getTime() && !period.resultsPublished;
+  const isUpcoming = (period) => currentTime < new Date(period.startTime).getTime() && !period.resultsPublished;
+  const awaitingPublish = (period) => currentTime >= new Date(period.endTime).getTime() && !period.resultsPublished;
 
   const toInputDateTime = (value) => {
     if (!value) return "";
@@ -271,15 +314,107 @@ export default function AdminPage() {
     setRescheduleEnd(toInputDateTime(period.endTime));
   };
 
+  const handleEditSessionChange = (field, value) => {
+    setEditSessionForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "scope") {
+        if (value === "national") {
+          next.scopeState = "";
+          next.scopeLGA = "";
+        } else if (value === "state") {
+          next.scopeLGA = "";
+        }
+      }
+      if (field === "minAge") {
+        next.minAge = value.replace(/[^0-9]/g, "");
+      }
+      return next;
+    });
+  };
+
+  const openEditSession = (period) => {
+    const scopeValue = (period.scope || "national").toLowerCase();
+    setEditSessionTarget(period);
+    setEditSessionForm({
+      title: period.title || "",
+      description: period.description || "",
+      scope: scopeValue,
+      scopeState: scopeValue === "national" ? "" : (period.scopeState || ""),
+      scopeLGA: scopeValue === "local" ? (period.scopeLGA || "") : "",
+      minAge: String(period.minAge ?? 18),
+      startTime: toInputDateTime(period.startTime),
+      endTime: toInputDateTime(period.endTime),
+    });
+  };
+
+  const closeEditSession = () => {
+    if (editSessionSaving) return;
+    setEditSessionTarget(null);
+    setEditSessionForm(defaultEditSessionForm());
+  };
+
+  async function submitEditSession() {
+    if (!editSessionTarget) return;
+    const { title, description, scope, scopeState, scopeLGA, minAge, startTime, endTime } = editSessionForm;
+    if (!startTime || !endTime) {
+      notifyError("Provide both start and end times");
+      return;
+    }
+    if (scope !== "national" && !scopeState.trim()) {
+      notifyError("Select a state for this scope");
+      return;
+    }
+    if (scope === "local" && !scopeLGA.trim()) {
+      notifyError("Select an LGA for the local scope");
+      return;
+    }
+    const startDate = new Date(startTime);
+    const endDate = new Date(endTime);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      notifyError("Use valid date and time values");
+      return;
+    }
+    if (endDate.getTime() <= startDate.getTime()) {
+      notifyError("End time must occur after the start time");
+      return;
+    }
+    setEditSessionSaving(true);
+    try {
+      const cleanedTitle = title.trim();
+      const cleanedDescription = description.trim();
+      const cleanedState = scope === "national" ? null : scopeState.trim() || null;
+      const cleanedLga = scope === "local" ? (scopeLGA.trim() || null) : null;
+      const payload = {
+        title: cleanedTitle,
+        description: cleanedDescription,
+        scope,
+        scopeState: cleanedState,
+        scopeLGA: cleanedLga,
+        minAge: minAge ? Number(minAge) : undefined,
+        startTime,
+        endTime,
+      };
+      const resp = await apiPut(`/api/admin/voting-period/${editSessionTarget.id}`, payload);
+      if (!resp?.success) throw new Error(resp?.message || "Failed to update session");
+      notifySuccess("Session updated");
+      closeEditSession();
+      await loadSessions({ suppressErrors: true, silent: true });
+    } catch (err) {
+      notifyError(err.message || "Unable to update session");
+    } finally {
+      setEditSessionSaving(false);
+    }
+  }
+
   const stats = useMemo(() => ({
     active: sessions.filter(isActive).length,
     upcoming: sessions.filter(isUpcoming).length,
     awaiting: sessions.filter(awaitingPublish).length,
-  }), [sessions]);
+  }), [sessions, currentTime]);
 
-  const activeSessions = useMemo(() => sessions.filter(isActive), [sessions]);
-  const awaitingSessions = useMemo(() => sessions.filter(awaitingPublish), [sessions]);
-  const upcomingSessions = useMemo(() => sessions.filter(isUpcoming), [sessions]);
+  const activeSessions = useMemo(() => sessions.filter(isActive), [sessions, currentTime]);
+  const awaitingSessions = useMemo(() => sessions.filter(awaitingPublish), [sessions, currentTime]);
+  const upcomingSessions = useMemo(() => sessions.filter(isUpcoming), [sessions, currentTime]);
 
   useEffect(() => {
     statsRef.current = stats;
@@ -365,6 +500,10 @@ export default function AdminPage() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (candidateSaving) {
+      notifyError("Wait for the current candidate save to finish");
+      return;
+    }
     if (!/image\/(png|jpe?g)/i.test(file.type)) {
       notifyError("Only PNG or JPEG images are allowed");
       return;
@@ -380,6 +519,7 @@ export default function AdminPage() {
 
   async function addCandidate(e) {
     e.preventDefault();
+    if (candidateSaving) return;
     const trimmedName = cName.trim();
     const candidateState = scope === "national" ? cState : scopeState;
     const candidateLga = scope === "local" ? scopeLGA : cLga;
@@ -403,39 +543,68 @@ export default function AdminPage() {
       notifyError("LGA is required for a local election");
       return;
     }
+    const payload = {
+      name: trimmedName,
+      state: candidateState,
+      lga: candidateLga,
+      photoUrl: cPhotoUrl || null,
+    };
+    setCandidateSaving(true);
     try {
-      const payload = {
-        name: trimmedName,
-        state: candidateState,
-        lga: candidateLga,
-        photoUrl: cPhotoUrl || null,
-      };
-      const resp = await apiPost("/api/admin/candidate", payload);
-      if (!resp?.success) throw new Error(resp?.message || "Unable to add candidate");
-      setCName("");
-      if (scope === "national") {
-        setCState("");
-        setCLga("");
-      } else if (scope === "state") {
-        setCLga("");
+      if (editingCandidate) {
+        const resp = await apiPut(`/api/admin/candidate/${editingCandidate.id}`, payload);
+        if (!resp?.success) throw new Error(resp?.message || "Unable to update candidate");
+        notifySuccess("Candidate updated");
+      } else {
+        const resp = await apiPost("/api/admin/candidate", payload);
+        if (!resp?.success) throw new Error(resp?.message || "Unable to add candidate");
+        notifySuccess("Candidate added");
       }
-      setCPhotoUrl("");
+      resetCandidateForm();
       await loadUnpublished();
-      notifySuccess("Candidate added");
     } catch (err) {
       notifyError(err.message);
+    } finally {
+      setCandidateSaving(false);
     }
   }
 
   async function removeCandidate(candidate) {
     if (!candidate?.id) return;
+    if (candidateSaving) {
+      notifyError("Please wait for the current candidate update to finish");
+      return;
+    }
     try {
+      if (editingCandidate?.id === candidate.id) {
+        resetCandidateForm();
+      }
       await apiDelete(`/api/admin/candidate/${candidate.id}`);
       await loadUnpublished({ silent: true, suppressErrors: true });
       notifySuccess(`${candidate.name || "Candidate"} removed`);
     } catch (err) {
       notifyError(err.message || "Failed to remove candidate");
     }
+  }
+
+  function beginEditCandidate(candidate) {
+    if (!candidate) return;
+    setEditingCandidate(candidate);
+    setCName(candidate.name || "");
+    setCPhotoUrl(candidate.photoUrl || "");
+    if (scope === "national") {
+      setCState(candidate.state || "");
+      setCLga(candidate.lga || "");
+    } else if (scope === "state") {
+      setCLga(candidate.lga || "");
+    } else if (scope === "local") {
+      // scopeLGA determines ballot, nothing extra required
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelCandidateEdit() {
+    resetCandidateForm();
   }
 
   async function startVoting() {
@@ -539,6 +708,19 @@ export default function AdminPage() {
       notifySuccess("Session deleted");
     } catch (err) {
       notifyError(err.message);
+    }
+  }
+
+  async function cancelSession(period) {
+    if (!period) return;
+    try {
+      const resp = await apiPost("/api/admin/periods/cancel", { periodId: period.id });
+      if (!resp?.success) throw new Error(resp?.message || "Failed to cancel session");
+      await Promise.all([loadSessions({ suppressErrors: true, silent: true }), loadUnpublished({ suppressErrors: true, silent: true })]);
+      resetCandidateForm();
+      notifySuccess("Session cancelled");
+    } catch (err) {
+      notifyError(err.message || "Unable to cancel session");
     }
   }
 
@@ -769,6 +951,13 @@ export default function AdminPage() {
         tone: "danger",
       };
     }
+    if (pendingAction.type === "cancel") {
+      return {
+        title: "Cancel session",
+        message: `Cancel ${pendingAction.period.title || `Session #${pendingAction.period.id}`} before it begins? Candidates will return to the staging area and voters will not see this ballot.`,
+        tone: "danger",
+      };
+    }
     if (pendingAction.type === "user-disable") {
       return {
         title: "Disable user",
@@ -798,6 +987,8 @@ export default function AdminPage() {
     switch (pendingAction.type) {
       case "delete":
         return "Delete";
+      case "cancel":
+        return "Cancel session";
       case "end":
         return "End session";
       case "publish":
@@ -819,6 +1010,7 @@ export default function AdminPage() {
       if (pendingAction.type === "publish") await publishResults(pendingAction.period);
       if (pendingAction.type === "end") await endVotingEarly(pendingAction.period);
       if (pendingAction.type === "delete") await deleteSession(pendingAction.period.id);
+      if (pendingAction.type === "cancel") await cancelSession(pendingAction.period);
       if (pendingAction.type === "user-disable") await disableUser(pendingAction.user);
       if (pendingAction.type === "user-enable") await enableUser(pendingAction.user);
       if (pendingAction.type === "user-delete") await deleteUser(pendingAction.user);
@@ -1198,11 +1390,23 @@ export default function AdminPage() {
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
                       <label className="form-label" htmlFor="session-start">Start time</label>
-                      <input id="session-start" type="datetime-local" className="form-control" value={start} onChange={(e) => setStart(e.target.value)} />
+                      <DateTimePicker
+                        id="session-start"
+                        value={start}
+                        onChange={setStart}
+                        placeholder="Select start time"
+                        minDate={new Date()}
+                      />
                     </div>
                     <div>
                       <label className="form-label" htmlFor="session-end">End time</label>
-                      <input id="session-end" type="datetime-local" className="form-control" value={end} onChange={(e) => setEnd(e.target.value)} />
+                      <DateTimePicker
+                        id="session-end"
+                        value={end}
+                        onChange={setEnd}
+                        placeholder="Select end time"
+                        minDate={start ? new Date(start) : undefined}
+                      />
                     </div>
                   </div>
                   <div className="grid gap-4 lg:grid-cols-2">
@@ -1244,9 +1448,30 @@ export default function AdminPage() {
                           </dd>
                         </div>
                       </dl>
+                      <div className="mt-4 flex items-center gap-3 rounded-xl bg-indigo-50/70 p-4 text-indigo-700">
+                        {start ? (
+                          <div className="flex h-14 w-14 flex-col items-center justify-center rounded-lg bg-white text-indigo-600 shadow-inner">
+                            <span className="text-[10px] font-semibold uppercase">{new Date(start).toLocaleString("default", { month: "short" })}</span>
+                            <span className="text-xl font-bold">{new Date(start).getDate()}</span>
+                          </div>
+                        ) : (
+                          <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-white text-indigo-400 shadow-inner">?</div>
+                        )}
+                        <div className="text-xs">
+                          <p><span className="font-semibold text-indigo-900">Starts:</span> {start ? new Date(start).toLocaleString() : "Pick a start time"}</p>
+                          <p><span className="font-semibold text-indigo-900">Ends:</span> {end ? new Date(end).toLocaleString() : "Select an end time"}</p>
+                        </div>
+                      </div>
                     </div>
                     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                      <h4 className="text-sm font-semibold text-slate-900">Stage candidates</h4>
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-sm font-semibold text-slate-900">Stage candidates</h4>
+                        {editingCandidate && (
+                          <span className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
+                            Editing {editingCandidate.name}
+                          </span>
+                        )}
+                      </div>
                       <form onSubmit={addCandidate} className="mt-3 space-y-3">
                         <div>
                           <label className="form-label" htmlFor="candidate-name">Full name</label>
@@ -1256,6 +1481,7 @@ export default function AdminPage() {
                             value={cName}
                             onChange={(e) => setCName(e.target.value)}
                             placeholder="Candidate name"
+                            disabled={candidateSaving}
                           />
                         </div>
                         <div className="grid gap-3 md:grid-cols-2">
@@ -1266,7 +1492,7 @@ export default function AdminPage() {
                               className="form-control"
                               value={scope === "national" ? cState : scopeState}
                               onChange={(e) => setCState(e.target.value)}
-                              disabled={scope !== "national"}
+                              disabled={scope !== "national" || candidateSaving}
                             >
                               <option value="">Select state…</option>
                               {states.map((state) => (
@@ -1278,25 +1504,25 @@ export default function AdminPage() {
                           </div>
                           <div>
                             <label className="form-label" htmlFor="candidate-lga">LGA</label>
-                          {scope === "local" ? (
-                            <input id="candidate-lga" className="form-control" value={scopeLGA || ""} disabled />
-                          ) : (
-                            <select
-                              id="candidate-lga"
-                              className="form-control"
-                              value={scope === "local" ? scopeLGA : cLga}
-                              onChange={(e) => setCLga(e.target.value)}
-                              disabled={scope !== "national" && scope !== "state"}
-                            >
-                              <option value="">{scope === "national" ? (cState ? "Select LGA…" : "Pick a state first") : "Select LGA…"}</option>
-                              {availableLgas.map((lga) => (
-                                <option key={lga} value={lga}>
-                                  {lga}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
+                            {scope === "local" ? (
+                              <input id="candidate-lga" className="form-control" value={scopeLGA || ""} disabled />
+                            ) : (
+                              <select
+                                id="candidate-lga"
+                                className="form-control"
+                                value={scope === "local" ? scopeLGA : cLga}
+                                onChange={(e) => setCLga(e.target.value)}
+                                disabled={candidateSaving || (scope !== "national" && scope !== "state")}
+                              >
+                                <option value="">{scope === "national" ? (cState ? "Select LGA…" : "Pick a state first") : "Select LGA…"}</option>
+                                {availableLgas.map((lga) => (
+                                  <option key={lga} value={lga}>
+                                    {lga}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
                         </div>
                         <div>
                           <label className="form-label" htmlFor="candidate-photo">Photo</label>
@@ -1307,15 +1533,34 @@ export default function AdminPage() {
                               placeholder="Photo URL (auto-filled after upload)"
                               value={cPhotoUrl}
                               onChange={(e) => setCPhotoUrl(e.target.value)}
+                              disabled={candidateSaving}
                             />
-                            <label className="btn-secondary cursor-pointer px-4">
+                            <label className={`btn-secondary cursor-pointer px-4 ${candidateSaving ? "opacity-60 pointer-events-none" : ""}`}>
                               Upload
-                              <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handlePickImage} />
+                              <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handlePickImage} disabled={candidateSaving} />
                             </label>
                           </div>
                         </div>
-                        <div className="flex justify-end">
-                          <button type="submit" className="btn-primary">Add candidate</button>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button type="submit" className="btn-primary" disabled={candidateSaving}>
+                            {candidateSaving
+                              ? editingCandidate
+                                ? "Saving…"
+                                : "Adding…"
+                              : editingCandidate
+                                ? "Save changes"
+                                : "Add candidate"}
+                          </button>
+                          {editingCandidate && (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={cancelCandidateEdit}
+                              disabled={candidateSaving}
+                            >
+                              Cancel edit
+                            </button>
+                          )}
                         </div>
                       </form>
 
@@ -1327,49 +1572,105 @@ export default function AdminPage() {
                             Add candidates that match this scope to launch the session.
                           </div>
                         ) : (
-                          validCandidates.map((candidate) => (
-                            <div key={candidate.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
-                              <div className="flex items-center gap-3">
-                                <img
-                                  src={absUrl(candidate.photoUrl || "/placeholder.png")}
-                                  alt={candidate.name}
-                                  className="h-10 w-10 rounded-full object-cover ring-1 ring-slate-200/70"
-                                />
-                                <div>
-                                  <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
-                                  <div className="text-xs text-slate-500">{candidate.state || "N/A"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
+                          validCandidates.map((candidate) => {
+                            const isEditing = editingCandidate?.id === candidate.id;
+                            return (
+                              <div
+                                key={candidate.id}
+                                className={`flex items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm ${isEditing ? "border-indigo-300 ring-2 ring-indigo-200/60" : ""}`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <img
+                                    src={absUrl(candidate.photoUrl || "/placeholder.png")}
+                                    alt={candidate.name}
+                                    className="h-10 w-10 rounded-full object-cover ring-1 ring-slate-200/70"
+                                  />
+                                  <div>
+                                    <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
+                                    <div className="text-xs text-slate-500">{candidate.state || "N/A"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
+                                    {isEditing && <div className="text-[11px] font-semibold uppercase text-indigo-600">Editing</div>}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col items-end gap-2">
+                                  <button
+                                    type="button"
+                                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
+                                    onClick={() => beginEditCandidate(candidate)}
+                                    disabled={candidateSaving}
+                                  >
+                                    <span className="inline-flex items-center gap-1">
+                                      <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                        <path d="M11.3 1.3a1 1 0 0 1 1.4 0l2 2a1 1 0 0 1 0 1.4l-7.8 7.8-3.2.8a.5.5 0 0 1-.6-.6l.8-3.2 7.8-7.8Zm-7 10.4-.4 1.5 1.5-.4L11 5.3 9.7 4 4.3 9.4Z" />
+                                      </svg>
+                                      Edit
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="text-xs font-semibold text-rose-600 hover:text-rose-700"
+                                    onClick={() => removeCandidate(candidate)}
+                                    disabled={candidateSaving}
+                                  >
+                                    <span className="inline-flex items-center gap-1">
+                                      <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                        <path d="M5.5 5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5Zm5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5ZM2 3.5A.5.5 0 0 1 2.5 3H5l.27-.54A1 1 0 0 1 6.12 2h3.76a1 1 0 0 1 .85.46L11 3h2.5a.5.5 0 0 1 0 1H13l-.86 9.17A1.5 1.5 0 0 1 10.66 14H5.34a1.5 1.5 0 0 1-1.48-1.33L3 4H2.5a.5.5 0 0 1-.5-.5Zm3.04-.5h5.92l-.17-.34a.1.1 0 0 0-.08-.05H6.29a.1.1 0 0 0-.08.05L5.54 3ZM4 4l.84 8.92a.5.5 0 0 0 .5.45h5.32a.5.5 0 0 0 .5-.45L12 4H4Z" />
+                                      </svg>
+                                      Remove
+                                    </span>
+                                  </button>
                                 </div>
                               </div>
-                              <button
-                                type="button"
-                                className="text-xs font-semibold text-rose-600 hover:text-rose-700"
-                                onClick={() => removeCandidate(candidate)}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
                         {mismatchedCandidates.length > 0 && (
                           <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs text-amber-700">
                             <div className="mb-2 text-sm font-semibold text-amber-800">Outside current scope</div>
                             <p className="mb-3">Update the scope or remove these candidates before launching.</p>
                             <div className="space-y-2">
-                              {mismatchedCandidates.map((candidate) => (
-                                <div key={candidate.id} className="flex items-center justify-between rounded-xl border border-amber-200/70 bg-white/80 p-3">
-                                  <div>
-                                    <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
-                                    <div className="text-xs text-slate-500">{candidate.state || "N/A"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="text-xs font-semibold text-rose-600 hover:text-rose-700"
-                                    onClick={() => removeCandidate(candidate)}
+                              {mismatchedCandidates.map((candidate) => {
+                                const isEditing = editingCandidate?.id === candidate.id;
+                                return (
+                                  <div
+                                    key={candidate.id}
+                                    className={`flex items-start justify-between gap-3 rounded-xl border border-amber-200/70 bg-white/80 p-3 ${isEditing ? "ring-2 ring-amber-300" : ""}`}
                                   >
-                                    Remove
-                                  </button>
-                                </div>
-                              ))}
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">{candidate.name}</div>
+                                      <div className="text-xs text-slate-500">{candidate.state || "N/A"}{candidate.lga ? ` • ${candidate.lga}` : ""}</div>
+                                      {isEditing && <div className="text-[11px] font-semibold uppercase text-amber-700">Editing</div>}
+                                    </div>
+                                    <div className="flex flex-col items-end gap-2">
+                                      <button
+                                        type="button"
+                                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
+                                        onClick={() => beginEditCandidate(candidate)}
+                                        disabled={candidateSaving}
+                                      >
+                                        <span className="inline-flex items-center gap-1">
+                                          <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                            <path d="M11.3 1.3a1 1 0 0 1 1.4 0l2 2a1 1 0 0 1 0 1.4l-7.8 7.8-3.2.8a.5.5 0 0 1-.6-.6l.8-3.2 7.8-7.8Zm-7 10.4-.4 1.5 1.5-.4L11 5.3 9.7 4 4.3 9.4Z" />
+                                          </svg>
+                                          Edit
+                                        </span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-xs font-semibold text-rose-600 hover:text-rose-700"
+                                        onClick={() => removeCandidate(candidate)}
+                                        disabled={candidateSaving}
+                                      >
+                                        <span className="inline-flex items-center gap-1">
+                                          <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                            <path d="M5.5 5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5Zm5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5ZM2 3.5A.5.5 0 0 1 2.5 3H5l.27-.54A1 1 0 0 1 6.12 2h3.76a1 1 0 0 1 .85.46L11 3h2.5a.5.5 0 0 1 0 1H13l-.86 9.17A1.5 1.5 0 0 1 10.66 14H5.34a1.5 1.5 0 0 1-1.48-1.33L3 4H2.5a.5.5 0 0 1-.5-.5Zm3.04-.5h5.92l-.17-.34a.1.1 0 0 0-.08-.05H6.29a.1.1 0 0 0-.08.05L5.54 3ZM4 4l.84 8.92a.5.5 0 0 0 .5.45h5.32a.5.5 0 0 0 .5-.45L12 4H4Z" />
+                                          </svg>
+                                          Remove
+                                        </span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -1413,38 +1714,91 @@ export default function AdminPage() {
               ) : (
                 sessions
                   .filter((period) => awaitingPublish(period) || isUpcoming(period))
-                  .map((period) => (
-                    <div key={period.id} className="flex h-full flex-col justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-base font-semibold text-slate-900">{period.title || `Session #${period.id}`}</h3>
-                          <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase text-indigo-600">
-                            {awaitingPublish(period) ? "Awaiting publish" : "Upcoming"}
-                          </span>
+                  .map((period) => {
+                    const startDate = new Date(period.startTime);
+                    const monthLabel = startDate.toLocaleString("default", { month: "short" });
+                    const dayLabel = startDate.getDate();
+                    const timing = resolveSessionTiming(period, currentTime);
+                    const countdownLabel = (() => {
+                      if (awaitingPublish(period) && timing.countdownMs > 0) {
+                        return `Ended ${formatCountdown(timing.countdownMs)} ago`;
+                      }
+                      if (timing.phase === "upcoming" && timing.countdownMs > 0) {
+                        return `Starts in ${formatCountdown(timing.countdownMs)}`;
+                      }
+                      if (timing.phase === "live" && timing.countdownMs > 0) {
+                        return `Ends in ${formatCountdown(timing.countdownMs)}`;
+                      }
+                      return null;
+                    })();
+                    const countdownClass = awaitingPublish(period)
+                      ? "text-amber-600"
+                      : timing.phase === "upcoming"
+                        ? "text-indigo-600"
+                        : "text-emerald-600";
+                    return (
+                      <div key={period.id} className="flex h-full flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-base font-semibold text-slate-900">{period.title || `Session #${period.id}`}</h3>
+                            <span className={
+                              awaitingPublish(period)
+                                ? "rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase text-emerald-700"
+                                : "rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase text-indigo-600"
+                            }>
+                              {awaitingPublish(period) ? "Awaiting publish" : "Upcoming"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-14 w-14 flex-col items-center justify-center rounded-xl bg-indigo-100 text-indigo-700 shadow-inner">
+                              <span className="text-[10px] font-semibold uppercase">{monthLabel}</span>
+                              <span className="text-xl font-bold">{dayLabel}</span>
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              <p className="font-medium text-slate-700">{startDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · Starts</p>
+                              <p>{new Date(period.startTime).toLocaleString()} – {new Date(period.endTime).toLocaleString()}</p>
+                              <p className="mt-1">
+                                Scope: <span className="font-semibold uppercase text-slate-800">{period.scope}</span>
+                                {period.scope !== "national" && period.scopeState ? ` • ${period.scopeState}` : ""}
+                                {period.scope === "local" && period.scopeLGA ? ` • ${period.scopeLGA}` : ""}
+                              </p>
+                              {countdownLabel && (
+                                <p className={`mt-1 text-[11px] font-semibold uppercase tracking-wide ${countdownClass}`}>
+                                  {countdownLabel}
+                                </p>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <p className="text-xs text-slate-500">
-                          {new Date(period.startTime).toLocaleString()} to {new Date(period.endTime).toLocaleString()}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          Scope: <span className="font-medium uppercase text-slate-800">{period.scope}</span>
-                          {period.scope !== "national" && period.scopeState ? ` • ${period.scopeState}` : ""}
-                          {period.scope === "local" && period.scopeLGA ? ` • ${period.scopeLGA}` : ""}
-                        </p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {isUpcoming(period) && viewerRole === "super-admin" && (
+                            <button type="button" className="btn-secondary" onClick={() => openReschedule(period)}>
+                              Reschedule
+                            </button>
+                          )}
+                          {isUpcoming(period) && viewerRole === "super-admin" && (
+                            <button type="button" className="btn-secondary" onClick={() => openEditSession(period)}>
+                              Edit details
+                            </button>
+                          )}
+                          {isUpcoming(period) && viewerRole === "super-admin" && (
+                            <button
+                              type="button"
+                              className="btn-secondary text-rose-600 hover:text-rose-700"
+                              onClick={() => setPendingAction({ type: "cancel", period })}
+                            >
+                              Cancel session
+                            </button>
+                          )}
+                          {awaitingPublish(period) && (
+                            <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period })}>
+                              Publish results
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {isUpcoming(period) && viewerRole === "super-admin" && (
-                          <button type="button" className="btn-secondary" onClick={() => openReschedule(period)}>
-                            Reschedule
-                          </button>
-                        )}
-                        {awaitingPublish(period) && (
-                          <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period })}>
-                            Publish results
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
               )}
             </div>
           </CollapsibleSection>
@@ -1452,7 +1806,12 @@ export default function AdminPage() {
       )}
 
       {tab === "live" && (
-        <LivePanel live={live} refresh={refreshLive} />
+        <LivePanel
+          live={live}
+          refresh={refreshLive}
+          viewerRole={viewerRole}
+          onEnd={(period) => setPendingAction({ type: "end", period })}
+        />
       )}
 
       {tab === "archive" && (
@@ -1866,6 +2225,17 @@ export default function AdminPage() {
 
       {tab === "logs" && <LogsPanel viewerRole={viewerRole} />}
 
+      <EditSessionDialog
+        open={!!editSessionTarget}
+        period={editSessionTarget}
+        form={editSessionForm}
+        states={states}
+        loading={editSessionSaving}
+        onChange={handleEditSessionChange}
+        onClose={closeEditSession}
+        onSubmit={submitEditSession}
+      />
+
       <RescheduleDialog
         open={!!rescheduleTarget}
         period={rescheduleTarget}
@@ -1910,6 +2280,205 @@ export default function AdminPage() {
   );
 }
 
+function EditSessionDialog({ open, period, form, states, loading, onChange, onClose, onSubmit }) {
+  if (!open || !period) return null;
+  const scopeOptions = [
+    { value: "national", label: "National" },
+    { value: "state", label: "State" },
+    { value: "local", label: "Local" },
+  ];
+  const selectedState = states.find((state) => state.label === form.scopeState);
+  const availableLgas = selectedState?.lgas || [];
+  const startPreview = form.startTime ? new Date(form.startTime) : new Date(period.startTime);
+  const endPreview = form.endTime ? new Date(form.endTime) : new Date(period.endTime);
+  const formatPreview = (date) => (
+    Number.isNaN(date.getTime())
+      ? "—"
+      : `${date.toLocaleDateString()} · ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+  );
+  const monthLabel = !Number.isNaN(startPreview.getTime()) ? startPreview.toLocaleString("default", { month: "short" }) : "";
+  const dayLabel = !Number.isNaN(startPreview.getTime()) ? startPreview.getDate() : "";
+
+  return (
+    <div className="fixed inset-0 z-[225] flex items-center justify-center bg-slate-900/60 px-4">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!loading) onSubmit();
+        }}
+        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Edit session details</h2>
+            <p className="text-sm text-slate-500">Update configuration before the ballot opens. Changes are broadcast instantly.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 w-8 rounded-full bg-white text-slate-500 shadow-sm transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+            aria-label="Close edit session dialog"
+            disabled={loading}
+          >
+            ×
+          </button>
+        </div>
+        <div className="grid gap-6 px-6 py-6 md:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-4">
+            <div>
+              <label className="form-label" htmlFor="edit-title">Title</label>
+              <input
+                id="edit-title"
+                className="form-control"
+                value={form.title}
+                onChange={(e) => onChange("title", e.target.value)}
+                placeholder="Election title"
+                disabled={loading}
+              />
+            </div>
+            <div>
+              <label className="form-label" htmlFor="edit-description">Description</label>
+              <textarea
+                id="edit-description"
+                className="form-control"
+                rows={3}
+                value={form.description}
+                onChange={(e) => onChange("description", e.target.value)}
+                placeholder="Short summary"
+                disabled={loading}
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="edit-scope">Scope</label>
+                <select
+                  id="edit-scope"
+                  className="form-control"
+                  value={form.scope}
+                  onChange={(e) => onChange("scope", e.target.value)}
+                  disabled={loading}
+                >
+                  {scopeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="form-label" htmlFor="edit-age">Minimum age</label>
+                <input
+                  id="edit-age"
+                  type="number"
+                  min={18}
+                  className="form-control"
+                  value={form.minAge}
+                  onChange={(e) => onChange("minAge", e.target.value)}
+                  placeholder="18"
+                  disabled={loading}
+                />
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="edit-state">State</label>
+                <select
+                  id="edit-state"
+                  className="form-control"
+                  value={form.scope === "national" ? "" : form.scopeState}
+                  onChange={(e) => onChange("scopeState", e.target.value)}
+                  disabled={form.scope === "national" || loading}
+                >
+                  <option value="">{form.scope === "national" ? "Not required" : "Select state"}</option>
+                  {states.map((state) => (
+                    <option key={state.label} value={state.label}>{state.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="form-label" htmlFor="edit-lga">LGA</label>
+                {form.scope === "local" ? (
+                  <select
+                    id="edit-lga"
+                    className="form-control"
+                    value={form.scopeLGA}
+                    onChange={(e) => onChange("scopeLGA", e.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="">Select LGA</option>
+                    {availableLgas.map((lga) => (
+                      <option key={lga} value={lga}>{lga}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input id="edit-lga" className="form-control" value={form.scope === "local" ? form.scopeLGA : ""} disabled placeholder="Not required" />
+                )}
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="form-label" htmlFor="edit-start">Start time</label>
+                <DateTimePicker
+                  id="edit-start"
+                  value={form.startTime}
+                  onChange={(val) => onChange("startTime", val)}
+                  placeholder="Select start time"
+                  disabled={loading}
+                  minDate={new Date()}
+                />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="edit-end">End time</label>
+                <DateTimePicker
+                  id="edit-end"
+                  value={form.endTime}
+                  onChange={(val) => onChange("endTime", val)}
+                  placeholder="Select end time"
+                  disabled={loading}
+                  minDate={form.startTime ? new Date(form.startTime) : undefined}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 text-indigo-700">
+              <div className="flex items-center gap-4">
+                <div className="flex h-16 w-16 flex-col items-center justify-center rounded-xl bg-white text-indigo-600 shadow-inner">
+                  <span className="text-[10px] font-semibold uppercase">{monthLabel}</span>
+                  <span className="text-2xl font-bold">{dayLabel}</span>
+                </div>
+                <div className="space-y-1 text-sm">
+                  <p><span className="font-semibold">Starts:</span> {formatPreview(startPreview)}</p>
+                  <p><span className="font-semibold">Ends:</span> {formatPreview(endPreview)}</p>
+                  <p><span className="font-semibold">Scope:</span> {form.scope}</p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+              <p className="font-semibold text-slate-700">Before you update</p>
+              <ul className="mt-2 space-y-1">
+                <li>• Ensure current candidates comply with the new scope.</li>
+                <li>• Voters will see changes instantly in their dashboards.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-secondary"
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button type="submit" className="btn-primary" disabled={loading}>
+            {loading ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function RescheduleDialog({ open, period, startValue, endValue, loading, onStartChange, onEndChange, onClose, onSubmit }) {
   if (!open || !period) return null;
   return (
@@ -1934,24 +2503,24 @@ function RescheduleDialog({ open, period, startValue, endValue, loading, onStart
         <div className="mt-4 space-y-3">
           <div>
             <label className="form-label" htmlFor="reschedule-start">New start time</label>
-            <input
+            <DateTimePicker
               id="reschedule-start"
-              type="datetime-local"
-              className="form-control"
               value={startValue}
-              onChange={(e) => onStartChange(e.target.value)}
+              onChange={onStartChange}
+              placeholder="Select new start time"
               disabled={loading}
+              minDate={new Date()}
             />
           </div>
           <div>
             <label className="form-label" htmlFor="reschedule-end">New end time</label>
-            <input
+            <DateTimePicker
               id="reschedule-end"
-              type="datetime-local"
-              className="form-control"
               value={endValue}
-              onChange={(e) => onEndChange(e.target.value)}
+              onChange={onEndChange}
+              placeholder="Select new end time"
               disabled={loading}
+              minDate={startValue ? new Date(startValue) : undefined}
             />
           </div>
         </div>
@@ -2008,7 +2577,8 @@ function StatPill({ label, value, tone }) {
   );
 }
 
-function LivePanel({ live, refresh }) {
+function LivePanel({ live, refresh, viewerRole, onEnd }) {
+  const canControl = ["admin", "super-admin"].includes((viewerRole || "").toLowerCase());
   return (
     <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
       <div className="flex items-center justify-between">
@@ -2033,7 +2603,18 @@ function LivePanel({ live, refresh }) {
                   <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
                   <div className="text-xs text-slate-500">Ends {new Date(period.endTime).toLocaleString()}</div>
                 </div>
-                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase text-emerald-600">Live</span>
+                <div className="flex items-center gap-2">
+                  {canControl && (
+                    <button
+                      type="button"
+                      className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-100"
+                      onClick={() => onEnd?.(period)}
+                    >
+                      End now
+                    </button>
+                  )}
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase text-emerald-600">Live</span>
+                </div>
               </div>
               <div className="mt-3 space-y-2">
                 {candidates.map((candidate) => (

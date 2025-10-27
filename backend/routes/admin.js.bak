@@ -8,7 +8,6 @@ const { recordAuditEvent } = require("../utils/audit");
 const { hardDeleteUser } = require("../utils/retention");
 const { buildMetricsSnapshot } = require("../utils/telemetry");
 const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
-const { notify } = require("../utils/notifications");
 
 // ---------- candidate image upload ----------
 const upCand = multer.diskStorage({
@@ -175,27 +174,7 @@ router.post("/voting-period", requireAuth, requireAdmin, async (req, res) => {
       );
     }
 
-    const io = req.app.get("io");
-    io?.emit("periodCreated", { periodId: insertId });
-    await notify(io, {
-      type: "session.created",
-      title: title ? `${title.trim()} scheduled` : "Voting session scheduled",
-      message: `Voting opens on ${new Date(start).toLocaleString()}`,
-      scope: electionScope,
-      scopeState: electionScope !== "national" ? scopeState || null : null,
-      scopeLGA: electionScope === "local" ? scopeLGA || null : null,
-      periodId: insertId,
-      metadata: {
-        periodId: insertId,
-        title: title || null,
-        description: description || null,
-        startTime: new Date(start).toISOString(),
-        endTime: new Date(end).toISOString(),
-        scope: electionScope,
-        scopeState: scopeState || null,
-        scopeLGA: scopeLGA || null,
-      },
-    });
+    req.app.get("io")?.emit("periodCreated", { periodId: insertId });
     res.json({ success: true, id: insertId });
   } catch (e) {
     console.error("admin/voting-period:", e);
@@ -246,7 +225,7 @@ router.post("/periods/:id/reschedule", requireAuth, requireRole(["super-admin"])
       return res.status(400).json({ error: "INVALID_RANGE", message: "End time must be after start time" });
     }
 
-    const [[period]] = await q(`SELECT title, startTime, endTime, scope, scopeState, scopeLGA FROM VotingPeriod WHERE id=?`, [id]);
+    const [[period]] = await q(`SELECT startTime FROM VotingPeriod WHERE id=?`, [id]);
     if (!period) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
     if (new Date(period.startTime).getTime() <= Date.now()) {
       return res.status(409).json({ error: "ALREADY_STARTED", message: "This session has already started and cannot be rescheduled" });
@@ -256,25 +235,6 @@ router.post("/periods/:id/reschedule", requireAuth, requireRole(["super-admin"])
     }
 
     await q(`UPDATE VotingPeriod SET startTime=?, endTime=? WHERE id=?`, [newStart, newEnd, id]);
-    const io = req.app.get("io");
-    io?.emit("periodUpdated", { periodId: id });
-    await notify(io, {
-      type: "session.rescheduled",
-      title: period.title ? `${period.title} rescheduled` : "Voting session rescheduled",
-      message: `New start: ${newStart.toLocaleString()}`,
-      scope: period.scope || "global",
-      scopeState: period.scope !== "national" ? (period.scopeState || null) : null,
-      scopeLGA: period.scope === "local" ? (period.scopeLGA || null) : null,
-      periodId: id,
-      metadata: {
-        periodId: id,
-        title: period.title || null,
-        previousStart: new Date(period.startTime).toISOString(),
-        previousEnd: new Date(period.endTime).toISOString(),
-        startTime: newStart.toISOString(),
-        endTime: newEnd.toISOString(),
-      },
-    });
     res.json({ success: true });
   } catch (e) {
     console.error("admin/periods/reschedule:", e);
@@ -289,16 +249,12 @@ router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => 
     let period = null;
 
     if (pid) {
-      const [[row]] = await q(
-        `SELECT id, title, startTime, endTime, scope, scopeState, scopeLGA, forcedEnded, resultsPublished
-         FROM VotingPeriod WHERE id=?`,
-        [pid]
-      );
+      const [[row]] = await q(`SELECT id, forcedEnded, resultsPublished FROM VotingPeriod WHERE id=?`, [pid]);
       if (!row) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
       period = row;
     } else {
       const [[row]] = await q(
-        `SELECT id, title, startTime, endTime, scope, scopeState, scopeLGA, forcedEnded, resultsPublished
+        `SELECT id, forcedEnded, resultsPublished FROM VotingPeriod
          WHERE forcedEnded=0 AND resultsPublished=0 AND endTime > UTC_TIMESTAMP()
          ORDER BY endTime ASC
          LIMIT 1`
@@ -312,24 +268,6 @@ router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => 
     }
 
     await q(`UPDATE VotingPeriod SET forcedEnded=1 WHERE id=?`, [period.id]);
-    const io = req.app.get("io");
-    io?.emit("periodEnded", { periodId: period.id, forced: true });
-    await notify(io, {
-      type: "session.ended",
-      title: period.title ? `${period.title} ended early` : "Voting session ended",
-      message: "Administrators ended this election ahead of schedule.",
-      scope: period.scope || "global",
-      scopeState: period.scope !== "national" ? (period.scopeState || null) : null,
-      scopeLGA: period.scope === "local" ? (period.scopeLGA || null) : null,
-      periodId: period.id,
-      metadata: {
-        periodId: period.id,
-        title: period.title || null,
-        scheduledEndTime: new Date(period.endTime).toISOString(),
-        endedAt: new Date().toISOString(),
-        forced: true,
-      },
-    });
     res.json({ success: true, periodId: period.id });
   } catch (e) {
     console.error("admin/end-early:", e);
@@ -344,16 +282,12 @@ router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
     let period = null;
 
     if (pid) {
-      const [[row]] = await q(
-        `SELECT id, title, endTime, scope, scopeState, scopeLGA, resultsPublished
-         FROM VotingPeriod WHERE id=?`,
-        [pid]
-      );
+      const [[row]] = await q(`SELECT id, resultsPublished FROM VotingPeriod WHERE id=?`, [pid]);
       if (!row) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
       period = row;
     } else {
       const [[row]] = await q(
-        `SELECT id, title, endTime, scope, scopeState, scopeLGA, resultsPublished
+        `SELECT id, resultsPublished FROM VotingPeriod
          WHERE resultsPublished=0 AND (forcedEnded=1 OR endTime <= UTC_TIMESTAMP())
          ORDER BY endTime DESC
          LIMIT 1`
@@ -367,23 +301,7 @@ router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
     }
 
     await q(`UPDATE VotingPeriod SET resultsPublished=1 WHERE id=?`, [period.id]);
-    const io = req.app.get("io");
-    io?.emit("resultsPublished", { periodId: period.id });
-    await notify(io, {
-      type: "results.published",
-      title: period.title ? `${period.title} results published` : "Election results are now available",
-      message: "Final tallies are ready to review.",
-      scope: period.scope || "global",
-      scopeState: period.scope !== "national" ? (period.scopeState || null) : null,
-      scopeLGA: period.scope === "local" ? (period.scopeLGA || null) : null,
-      periodId: period.id,
-      metadata: {
-        periodId: period.id,
-        title: period.title || null,
-        publishedAt: new Date().toISOString(),
-        endTime: new Date(period.endTime).toISOString(),
-      },
-    });
+    req.app.get("io")?.emit("resultsPublished", { periodId: period.id });
     res.json({ success: true, periodId: period.id });
   } catch (e) {
     console.error("admin/publish:", e);
@@ -432,7 +350,7 @@ router.post("/periods/cancel", requireAuth, requireRole(["super-admin"]), async 
   try {
     const pid = Number(req.body?.periodId || req.query?.periodId || 0);
     if (!pid) return res.status(400).json({ error: "MISSING_ID" });
-    const [[period]] = await q(`SELECT id, title, startTime, endTime, scope, scopeState, scopeLGA FROM VotingPeriod WHERE id=?`, [pid]);
+    const [[period]] = await q(`SELECT id, title, startTime FROM VotingPeriod WHERE id=?`, [pid]);
     if (!period) return res.status(404).json({ error: "NOT_FOUND", message: "Voting period not found" });
     if (new Date(period.startTime).getTime() <= Date.now()) {
       return res.status(409).json({ error: "ALREADY_STARTED", message: "This session has already started. Use end-voting instead of cancelling." });
@@ -453,23 +371,13 @@ router.post("/periods/cancel", requireAuth, requireRole(["super-admin"]), async 
       after: null,
       notes: "Session cancelled before start",
     });
-    const io = req.app.get("io");
-    io?.emit("periodCancelled", { periodId: pid });
-    await notify(io, {
-      type: "session.cancelled",
-      title: period.title ? `${period.title} cancelled` : "Voting session cancelled",
-      message: "This election has been cancelled before it started.",
-      scope: period.scope || "global",
-      scopeState: period.scope !== "national" ? (period.scopeState || null) : null,
-      scopeLGA: period.scope === "local" ? (period.scopeLGA || null) : null,
+    req.app.get("io")?.emit("periodCancelled", { periodId: pid });
+
+    const [[titleRow]] = await q(`SELECT title FROM VotingPeriod WHERE id=?`, [pid]);
+    req.app.get("io")?.emit("notifyUser", {
+      type: "session-cancelled",
       periodId: pid,
-      metadata: {
-        periodId: pid,
-        title: period.title || null,
-        startTime: new Date(period.startTime).toISOString(),
-        endTime: new Date(period.endTime).toISOString(),
-        status: "cancelled",
-      },
+      title: titleRow?.title || null,
     });
     res.json({ success: true, periodId: pid });
   } catch (e) {
@@ -595,37 +503,7 @@ router.put("/voting-period/:id", requireAuth, requireRole(["super-admin"]), asyn
       },
     });
 
-    const io = req.app.get("io");
-    io?.emit("periodUpdated", { periodId: pid });
-    await notify(io, {
-      type: "session.updated",
-      title: next.title ? `${next.title} updated` : "Voting session updated",
-      message: "Session details were updated by an administrator.",
-      scope: normalizedScope || "global",
-      scopeState: normalizedScope !== "national" ? (next.scopeState || null) : null,
-      scopeLGA: normalizedScope === "local" ? (next.scopeLGA || null) : null,
-      periodId: pid,
-      metadata: {
-        periodId: pid,
-        title: next.title || null,
-        previous: {
-          startTime: new Date(period.startTime).toISOString(),
-          endTime: new Date(period.endTime).toISOString(),
-          scope: period.scope,
-          scopeState: period.scopeState,
-          scopeLGA: period.scopeLGA,
-          minAge: period.minAge,
-        },
-        next: {
-          startTime: next.startTime.toISOString(),
-          endTime: next.endTime.toISOString(),
-          scope: normalizedScope,
-          scopeState: normalizedScope !== "national" ? (next.scopeState || null) : null,
-          scopeLGA: normalizedScope === "local" ? (next.scopeLGA || null) : null,
-          minAge: next.minAge,
-        },
-      },
-    });
+    req.app.get("io")?.emit("periodUpdated", { periodId: pid });
     res.json({ success: true, id: pid });
   } catch (e) {
     console.error("admin/periods/update:", e);

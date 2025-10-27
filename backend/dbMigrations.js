@@ -257,6 +257,42 @@ async function ensureIdentityColumns() {
   await ensureIndex("Users", "uq_users_voterCard", "ALTER TABLE Users ADD UNIQUE KEY uq_users_voterCard (voterCardNumber)");
 }
 
+async function ensureNotificationTables() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS NotificationEvent (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      type VARCHAR(60) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      message TEXT NULL,
+      scope VARCHAR(20) NOT NULL DEFAULT 'global',
+      scopeState VARCHAR(120) NULL,
+      scopeLGA VARCHAR(120) NULL,
+      periodId INT NULL,
+      metadata JSON NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_notification_created (createdAt),
+      KEY idx_notification_scope (scope, scopeState, scopeLGA),
+      KEY idx_notification_period (periodId),
+      CONSTRAINT fk_notification_period FOREIGN KEY (periodId) REFERENCES VotingPeriod(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await q(`
+    CREATE TABLE IF NOT EXISTS NotificationReceipt (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      notificationId BIGINT NOT NULL,
+      userId INT NOT NULL,
+      readAt DATETIME NULL,
+      clearedAt DATETIME NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_notification_user (notificationId, userId),
+      KEY idx_receipt_user (userId, createdAt),
+      CONSTRAINT fk_receipt_notification FOREIGN KEY (notificationId) REFERENCES NotificationEvent(id) ON DELETE CASCADE,
+      CONSTRAINT fk_receipt_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
 async function alignRolesWithFlags() {
   const adminUsernames = envSet(process.env.ADMIN_USERNAMES);
   const adminEmails = envSet(process.env.ADMIN_EMAILS);
@@ -304,6 +340,7 @@ async function ensureSchema() {
   await alignRolesWithFlags();
   await ensureRequestLogColumns();
   await ensureAuditLogTable();
+  await ensureNotificationTables();
 }
 
 module.exports = { ensureSchema };

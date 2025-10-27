@@ -43,8 +43,11 @@ router.post("/", requireAuth, async (req, res) => {
     const [[candidate]] = await q(`SELECT id, periodId, state, lga FROM Candidates WHERE id=? LIMIT 1`, [cid]);
     if (!candidate?.periodId) return res.status(400).json({ error: "INVALID", message: "Candidate not in a session" });
 
-    const [[period]] = await q(`SELECT id, minAge, scope, scopeState, scopeLGA, startTime, requireWhitelist FROM VotingPeriod WHERE id=? LIMIT 1`, [candidate.periodId]);
+    const [[period]] = await q(`SELECT id, minAge, scope, scopeState, scopeLGA, startTime, endTime, requireWhitelist, forcedEnded, resultsPublished FROM VotingPeriod WHERE id=? LIMIT 1`, [candidate.periodId]);
     if (!period) return res.status(404).json({ error: "NOT_FOUND" });
+    if (period.forcedEnded || period.resultsPublished || new Date(period.endTime).getTime() <= Date.now()) {
+      return res.status(403).json({ error: "SESSION_CLOSED", message: "Voting for this session has ended." });
+    }
 
     const [[user]] = await q(`SELECT email, state, residenceLGA, dateOfBirth FROM Users WHERE id=? LIMIT 1`, [req.user.id]);
 

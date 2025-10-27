@@ -50,6 +50,7 @@ app.use("/api/vote", require("./routes/vote"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/profile", require("./routes/profile"));  // profile endpoints
 app.use("/api/chat", require("./routes/chat"));
+app.use("/api/notifications", require("./routes/notifications"));
 
 // Socket.IO
 const server = http.createServer(app);

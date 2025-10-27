@@ -5,7 +5,7 @@ import { mediaUrl } from "../lib/mediaUrl";
 import { notifyError, notifySuccess } from "../components/Toast";
 import { getSocket } from "../lib/socket";
 import ConfirmDialog from "../components/ConfirmDialog";
-
+import { resolveSessionTiming, formatCountdown } from "../lib/time";
 
 export default function Vote() {
   const router = useRouter();
@@ -19,6 +19,8 @@ export default function Vote() {
   const socketRef = useRef(null);
   const pollRef = useRef(null);
   const [selectedSessionId, setSelectedSessionId] = useState(null);
+  const [secureOverlay, setSecureOverlay] = useState(false);
+  const overlayTimerRef = useRef(null);
 
   const loadSessions = async ({ suppressErrors } = {}) => {
     try {
@@ -83,12 +85,16 @@ export default function Vote() {
     socket?.on("periodCreated", handleRefresh);
     socket?.on("resultsPublished", handleRefresh);
     socket?.on("periodUpdated", handleRefresh);
+    socket?.on("periodCancelled", handleRefresh);
+    socket?.on("periodEnded", handleRefresh);
 
     return () => {
       mounted = false;
       socket?.off("periodCreated", handleRefresh);
       socket?.off("resultsPublished", handleRefresh);
       socket?.off("periodUpdated", handleRefresh);
+      socket?.off("periodCancelled", handleRefresh);
+      socket?.off("periodEnded", handleRefresh);
     };
   }, [allowed]);
 
@@ -138,6 +144,9 @@ export default function Vote() {
       await jpost("/api/vote", { candidateId: candidate.id });
       notifySuccess("Vote recorded");
       await refreshPeriod(period.id);
+      setSecureOverlay(true);
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+      overlayTimerRef.current = setTimeout(() => setSecureOverlay(false), 6000);
     } catch (e) {
       notifyError(e.message || "Unable to cast vote");
     } finally {
@@ -146,22 +155,29 @@ export default function Vote() {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    };
+  }, []);
+
   const selectedSession = Array.isArray(sessions) ? sessions.find((session) => session.id === selectedSessionId) : null;
+  const [clock, setClock] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const selectedCandidates = selectedSession ? candidatesByPeriod[selectedSession.id] || [] : [];
   const selectedStatus = selectedSession ? statusByPeriod[selectedSession.id] || {} : {};
   const youVotedId = selectedStatus?.youVoted?.id;
   const hasVoted = !!selectedStatus?.hasVoted;
-  const [clock, setClock] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setClock(Date.now()), 15000);
-    return () => clearInterval(timer);
-  }, []);
   const isSessionActive = (session, referenceTime = clock) => {
     if (!session) return false;
     const start = new Date(session.startTime).getTime();
     const end = new Date(session.endTime).getTime();
     return referenceTime >= start && referenceTime <= end;
   };
+  const selectedTiming = resolveSessionTiming(selectedSession, clock);
   const sortedSessions = useMemo(() => {
     if (!Array.isArray(sessions)) return [];
     return [...sessions].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
@@ -201,7 +217,18 @@ export default function Vote() {
 
   return (
     <>
-      <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-6">
+      {secureOverlay && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm px-6 text-center">
+          <div className="w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900/90 px-6 py-7 text-white shadow-2xl">
+            <h3 className="text-lg font-semibold tracking-tight">Ballot secured</h3>
+            <p className="mt-3 text-sm text-slate-200">
+              Your vote has been locked in. We’ve hidden the ballot details so no one can capture or replay your selection.
+              You can safely leave this page or review other sessions.
+            </p>
+          </div>
+        </div>
+      )}
+      <div className={`mx-auto w-full max-w-5xl space-y-4 px-4 py-6 ${hasVoted ? "select-none" : ""}`}>
         {sortedSessions.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center text-sm text-slate-500 shadow-sm">
             No eligible sessions yet. As soon as one opens, it will appear here.
@@ -213,16 +240,15 @@ export default function Vote() {
               <div className="space-y-1">
                   {sortedSessions.map((session) => {
                   const active = selectedSessionId === session.id;
-                  const startTime = new Date(session.startTime).getTime();
-                  const isActiveNow = isSessionActive(session, clock);
-                  const statusLabel = isActiveNow
+                  const timing = resolveSessionTiming(session, clock);
+                  const statusLabel = timing.phase === "live"
                     ? "Live"
-                    : clock < startTime
+                    : timing.phase === "upcoming"
                       ? "Starting soon"
                       : "Closed";
-                  const statusTone = isActiveNow
+                  const statusTone = timing.phase === "live"
                     ? "bg-emerald-100 text-emerald-700"
-                    : statusLabel === "Upcoming"
+                    : timing.phase === "upcoming"
                       ? "bg-indigo-100 text-indigo-700"
                       : "bg-slate-200 text-slate-600";
                   return (
@@ -239,6 +265,12 @@ export default function Vote() {
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusTone}`}>{statusLabel}</span>
                       </div>
                       <p className="mt-1 text-xs text-slate-500">{new Date(session.startTime).toLocaleString()}</p>
+                      {timing.phase !== "closed" && timing.countdownMs > 0 && (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {timing.phase === "live" ? "Ends in" : "Starts in"}{" "}
+                          <span className="font-semibold text-slate-700">{formatCountdown(timing.countdownMs)}</span>
+                        </p>
+                      )}
                     </button>
                   );
                 })}
@@ -253,6 +285,16 @@ export default function Vote() {
                     <div>
                       <h2 className="text-lg font-semibold text-slate-900">{selectedSession.title || `Session #${selectedSession.id}`}</h2>
                       <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} to {new Date(selectedSession.endTime).toLocaleString()}</p>
+                      {selectedTiming.phase !== "closed" && selectedTiming.countdownMs > 0 && (
+                        <span
+                          className={`mt-2 inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                            selectedTiming.phase === "live" ? "bg-emerald-50 text-emerald-700" : "bg-indigo-50 text-indigo-700"
+                          }`}
+                        >
+                          {selectedTiming.phase === "live" ? "Ends in" : "Starts in"}
+                          <span className="text-slate-900">{formatCountdown(selectedTiming.countdownMs)}</span>
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-500">
                       <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold uppercase">Scope: {selectedSession.scope}</span>
@@ -264,13 +306,19 @@ export default function Vote() {
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
                     {hasVoted ? (
-                      <p className="font-semibold text-emerald-700">Your vote has been recorded. You can still review the candidates below.</p>
+                      <p className="font-semibold text-emerald-700">
+                        Your vote has been recorded and ballot details are now hidden to protect you from coercion or vote buying.
+                      </p>
                     ) : (
                       <p>Select your preferred candidate. You can only vote once.</p>
                     )}
                   </div>
                   <div className="space-y-2">
-                    {selectedCandidates.length === 0 ? (
+                    {hasVoted ? (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+                        Ballot sealed. For your security the candidate list is no longer visible. You may close this page or return to the dashboard.
+                      </div>
+                    ) : selectedCandidates.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">No candidates published yet.</div>
                     ) : (
                       selectedCandidates.map((candidate) => {

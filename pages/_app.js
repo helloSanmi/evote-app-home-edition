@@ -9,6 +9,7 @@ import Layout from "../components/Layout";
 import { notifyInfo, notifyError } from "../components/Toast";
 import { apiPost } from "../lib/apiBase";
 import { getSocket, reidentifySocket } from "../lib/socket";
+import { NotificationsProvider } from "../components/NotificationsProvider";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
@@ -78,7 +79,7 @@ export default function App({ Component, pageProps }) {
   }, [router]);
 
   return (
-    <>
+    <NotificationsProvider>
       <Head>
         <link rel="icon" href="/favicon.png" type="image/png" />
         <link rel="apple-touch-icon" href="/favicon.png" />
@@ -87,6 +88,6 @@ export default function App({ Component, pageProps }) {
         <Component {...pageProps} />
       </Layout>
       <ToastContainer position="top-center" />
-    </>
+    </NotificationsProvider>
   );
 }

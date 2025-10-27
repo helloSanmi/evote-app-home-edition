@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { absUrl } from "../lib/apiBase";
+import NotificationBell from "./NotificationBell";
 
 export default function Navbar() {
   const router = useRouter();
@@ -135,6 +136,7 @@ export default function Navbar() {
           {isAdmin ? (
             <>
               {adminLinks.map((link) => navItem(link.href, link.label, { compact: true }))}
+              <NotificationBell />
               <button
                 type="button"
                 onClick={signOut}
@@ -146,6 +148,7 @@ export default function Navbar() {
           ) : loggedIn ? (
             <>
               {memberLinks.map((link) => navItem(link.href, link.label, { compact: true }))}
+              <NotificationBell />
               <div className="relative" ref={profileRef}>
                 <button
                   type="button"
@@ -190,6 +193,7 @@ export default function Navbar() {
         </div>
 
         <div className="flex items-center gap-2 md:hidden" ref={mobileRef}>
+          <NotificationBell />
           {loggedIn && !isAdmin && (
             <button
               type="button"
