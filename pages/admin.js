@@ -46,6 +46,9 @@ export default function AdminPage() {
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const createFilterState = () => ({ scope: "all", state: "", lga: "" });
+  const [archiveFilters, setArchiveFilters] = useState(() => createFilterState());
+  const [upcomingFilters, setUpcomingFilters] = useState(() => createFilterState());
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -83,6 +86,9 @@ export default function AdminPage() {
   const [rescheduleStart, setRescheduleStart] = useState("");
   const [rescheduleEnd, setRescheduleEnd] = useState("");
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState(null);
   const defaultEditSessionForm = () => ({
     title: "",
     description: "",
@@ -136,6 +142,7 @@ export default function AdminPage() {
     { id: "sessions", label: "Sessions" },
     { id: "live", label: "Live" },
     { id: "archive", label: "Archive" },
+    { id: "analytics", label: "Analytics" },
     { id: "users", label: "Users" },
     { id: "logs", label: "Request Logs" },
   ], []);
@@ -292,12 +299,156 @@ export default function AdminPage() {
   }, []);
 
   const isActive = (period) => {
+    if (!period || period.forcedEnded || period.resultsPublished) return false;
     const start = new Date(period.startTime).getTime();
     const end = new Date(period.endTime).getTime();
-    return currentTime >= start && currentTime < end && !period.resultsPublished;
+    return currentTime >= start && currentTime < end;
   };
-  const isUpcoming = (period) => currentTime < new Date(period.startTime).getTime() && !period.resultsPublished;
-  const awaitingPublish = (period) => currentTime >= new Date(period.endTime).getTime() && !period.resultsPublished;
+  const isUpcoming = (period) => {
+    if (!period || period.forcedEnded || period.resultsPublished) return false;
+    return currentTime < new Date(period.startTime).getTime();
+  };
+  const awaitingPublish = (period) => {
+    if (!period || period.resultsPublished) return false;
+    if (period.forcedEnded) return true;
+    return currentTime >= new Date(period.endTime).getTime();
+  };
+
+  const sessionMatchesFilters = (period, filters) => {
+    if (!period) return false;
+    const normalizedScope = (period.scope || "national").toLowerCase();
+    if (filters.scope !== "all" && normalizedScope !== filters.scope) return false;
+    if ((filters.scope === "state" || filters.scope === "local") && filters.state) {
+      const periodState = (period.scopeState || "").trim().toLowerCase();
+      if (periodState !== filters.state.trim().toLowerCase()) return false;
+    }
+    if (filters.scope === "local" && filters.lga) {
+      const periodLga = (period.scopeLGA || "").trim().toLowerCase();
+      if (periodLga !== filters.lga.trim().toLowerCase()) return false;
+    }
+    return true;
+  };
+
+  const archiveBaseSessions = useMemo(() => (
+    sessions.filter((period) => period.resultsPublished || (!isActive(period) && !isUpcoming(period) && !awaitingPublish(period)))
+  ), [sessions, isActive, isUpcoming, awaitingPublish]);
+
+  const filteredArchiveSessions = useMemo(() => (
+    archiveBaseSessions.filter((period) => sessionMatchesFilters(period, archiveFilters))
+  ), [archiveBaseSessions, archiveFilters]);
+
+  const hasArchiveSessions = archiveBaseSessions.length > 0;
+  const archiveHasMatches = filteredArchiveSessions.length > 0;
+
+  const upcomingBaseSessions = useMemo(() => (
+    sessions.filter((period) => awaitingPublish(period) || isUpcoming(period))
+  ), [sessions, isUpcoming, awaitingPublish]);
+
+  const filteredUpcomingSessions = useMemo(() => (
+    upcomingBaseSessions.filter((period) => sessionMatchesFilters(period, upcomingFilters))
+  ), [upcomingBaseSessions, upcomingFilters]);
+
+  const hasUpcomingSessions = upcomingBaseSessions.length > 0;
+  const upcomingHasMatches = filteredUpcomingSessions.length > 0;
+
+  const archiveStateOptions = useMemo(() => {
+    const set = new Set();
+    archiveBaseSessions.forEach((period) => {
+      const scopeValue = (period.scope || "").toLowerCase();
+      if ((scopeValue === "state" || scopeValue === "local") && period.scopeState) {
+        set.add(period.scopeState.trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [archiveBaseSessions]);
+
+  const upcomingStateOptions = useMemo(() => {
+    const set = new Set();
+    upcomingBaseSessions.forEach((period) => {
+      const scopeValue = (period.scope || "").toLowerCase();
+      if ((scopeValue === "state" || scopeValue === "local") && period.scopeState) {
+        set.add(period.scopeState.trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [upcomingBaseSessions]);
+
+  const archiveLgaOptions = useMemo(() => {
+    if (!archiveFilters.state) return [];
+    const normalized = archiveFilters.state.trim().toLowerCase();
+    const stateData = states.find((entry) => (entry.label || "").trim().toLowerCase() === normalized);
+    if (stateData?.lgas?.length) return stateData.lgas;
+    const set = new Set();
+    archiveBaseSessions
+      .filter((period) => (period.scope || "").toLowerCase() === "local" && (period.scopeState || "").trim().toLowerCase() === normalized)
+      .forEach((period) => {
+        if (period.scopeLGA) set.add(period.scopeLGA.trim());
+      });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [archiveFilters.state, archiveBaseSessions, states]);
+
+  const upcomingLgaOptions = useMemo(() => {
+    if (!upcomingFilters.state) return [];
+    const normalized = upcomingFilters.state.trim().toLowerCase();
+    const stateData = states.find((entry) => (entry.label || "").trim().toLowerCase() === normalized);
+    if (stateData?.lgas?.length) return stateData.lgas;
+    const set = new Set();
+    upcomingBaseSessions
+      .filter((period) => (period.scope || "").toLowerCase() === "local" && (period.scopeState || "").trim().toLowerCase() === normalized)
+      .forEach((period) => {
+        if (period.scopeLGA) set.add(period.scopeLGA.trim());
+      });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [upcomingFilters.state, upcomingBaseSessions, states]);
+
+  const scopeFilterOptions = useMemo(() => [
+    { value: "all", label: "All scopes" },
+    { value: "national", label: "National / Presidential" },
+    { value: "state", label: "State" },
+    { value: "local", label: "Local Government" },
+  ], []);
+
+  const handleArchiveScopeChange = (value) => {
+    setArchiveFilters((prev) => {
+      const next = { ...prev, scope: value };
+      if (value === "all" || value === "national") {
+        next.state = "";
+        next.lga = "";
+      } else if (value === "state") {
+        next.lga = "";
+      }
+      return next;
+    });
+  };
+
+  const handleArchiveStateChange = (value) => {
+    setArchiveFilters((prev) => ({ ...prev, state: value, lga: "" }));
+  };
+
+  const handleArchiveLgaChange = (value) => {
+    setArchiveFilters((prev) => ({ ...prev, lga: value }));
+  };
+
+  const handleUpcomingScopeChange = (value) => {
+    setUpcomingFilters((prev) => {
+      const next = { ...prev, scope: value };
+      if (value === "all" || value === "national") {
+        next.state = "";
+        next.lga = "";
+      } else if (value === "state") {
+        next.lga = "";
+      }
+      return next;
+    });
+  };
+
+  const handleUpcomingStateChange = (value) => {
+    setUpcomingFilters((prev) => ({ ...prev, state: value, lga: "" }));
+  };
+
+  const handleUpcomingLgaChange = (value) => {
+    setUpcomingFilters((prev) => ({ ...prev, lga: value }));
+  };
 
   const toInputDateTime = (value) => {
     if (!value) return "";
@@ -423,16 +574,23 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!selPast) return;
-    const match = sessions.find((period) => period.id === selPast.id);
+    const match = filteredArchiveSessions.find((period) => period.id === selPast.id);
     if (!match) {
       setSelPast(null);
       setPastCands([]);
       setAudit(null);
-    } else {
+    } else if (selPast !== match) {
       setSelPast(match);
     }
+  }, [filteredArchiveSessions, selPast]);
+
+  useEffect(() => {
+    if (tab !== "analytics") return;
+    if (analyticsLoading) return;
+    if (analytics) return;
+    loadAnalytics({ suppressErrors: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions]);
+  }, [tab]);
   async function loadUnpublished(options = {}) {
     const { silent = false, suppressErrors = false } = options;
     if (!silent) setUnpubLoading(true);
@@ -662,6 +820,7 @@ export default function AdminPage() {
       const resp = await apiPost("/api/admin/end-voting-early", period ? { periodId: period.id } : {});
       if (!resp?.success && !resp?.already) throw new Error(resp?.message || "Failed to end voting early");
       await Promise.all([loadSessions(), loadUnpublished()]);
+      await refreshLive();
       setCName("");
       setCState("");
       setCLga("");
@@ -773,6 +932,23 @@ export default function AdminPage() {
       setLive([]);
     }
   }
+
+  const loadAnalytics = async ({ suppressErrors = false } = {}) => {
+    if (analyticsLoading) return;
+    setAnalyticsLoading(true);
+    if (!suppressErrors) setAnalyticsError(null);
+    try {
+      const data = await apiGet("/api/admin/analytics/summary");
+      setAnalytics(data || null);
+      setAnalyticsError(null);
+    } catch (err) {
+      const message = err.message || "Failed to load analytics";
+      setAnalyticsError(message);
+      if (!suppressErrors) notifyError(message);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
 
   async function disableUser(user) {
     try {
@@ -1704,22 +1880,61 @@ export default function AdminPage() {
               </button>
             }
           >
+            <div className="mt-4 flex flex-wrap gap-2">
+              <select
+                value={upcomingFilters.scope}
+                onChange={(e) => handleUpcomingScopeChange(e.target.value)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+              >
+                {scopeFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              {upcomingFilters.scope !== "all" && upcomingFilters.scope !== "national" && (
+                <select
+                  value={upcomingFilters.state}
+                  onChange={(e) => handleUpcomingStateChange(e.target.value)}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+                >
+                  <option value="">All states</option>
+                  {upcomingStateOptions.map((stateName) => (
+                    <option key={stateName} value={stateName}>{stateName}</option>
+                  ))}
+                </select>
+              )}
+              {upcomingFilters.scope === "local" && upcomingFilters.state && (
+                <select
+                  value={upcomingFilters.lga}
+                  onChange={(e) => handleUpcomingLgaChange(e.target.value)}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+                >
+                  <option value="">All LGAs</option>
+                  {upcomingLgaOptions.map((lgaName) => (
+                    <option key={lgaName} value={lgaName}>{lgaName}</option>
+                  ))}
+                </select>
+              )}
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               {loadingSessions ? (
                 <div className="col-span-full text-sm text-slate-500 animate-pulse">Loading sessions…</div>
-              ) : sessions.filter((period) => awaitingPublish(period) || isUpcoming(period)).length === 0 ? (
+              ) : !hasUpcomingSessions ? (
                 <div className="col-span-full rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
                   No upcoming or unpublished sessions at the moment.
                 </div>
+              ) : !upcomingHasMatches ? (
+                <div className="col-span-full rounded-2xl border border-dashed border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-700">
+                  No sessions match the current filters.
+                </div>
               ) : (
-                sessions
-                  .filter((period) => awaitingPublish(period) || isUpcoming(period))
+                filteredUpcomingSessions
                   .map((period) => {
                     const startDate = new Date(period.startTime);
                     const monthLabel = startDate.toLocaleString("default", { month: "short" });
                     const dayLabel = startDate.getDate();
                     const timing = resolveSessionTiming(period, currentTime);
                     const countdownLabel = (() => {
+                      if (period.forcedEnded) return "Ended early";
                       if (awaitingPublish(period) && timing.countdownMs > 0) {
                         return `Ended ${formatCountdown(timing.countdownMs)} ago`;
                       }
@@ -1731,11 +1946,13 @@ export default function AdminPage() {
                       }
                       return null;
                     })();
-                    const countdownClass = awaitingPublish(period)
-                      ? "text-amber-600"
-                      : timing.phase === "upcoming"
-                        ? "text-indigo-600"
-                        : "text-emerald-600";
+                    const countdownClass = period.forcedEnded
+                      ? "text-rose-600"
+                      : awaitingPublish(period)
+                        ? "text-amber-600"
+                        : timing.phase === "upcoming"
+                          ? "text-indigo-600"
+                          : "text-emerald-600";
                     return (
                       <div key={period.id} className="flex h-full flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
                         <div className="space-y-3">
@@ -1826,16 +2043,50 @@ export default function AdminPage() {
               Reload
             </button>
           </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <select
+              value={archiveFilters.scope}
+              onChange={(e) => handleArchiveScopeChange(e.target.value)}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+            >
+              {scopeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            {archiveFilters.scope !== "all" && archiveFilters.scope !== "national" && (
+              <select
+                value={archiveFilters.state}
+                onChange={(e) => handleArchiveStateChange(e.target.value)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+              >
+                <option value="">All states</option>
+                {archiveStateOptions.map((stateName) => (
+                  <option key={stateName} value={stateName}>{stateName}</option>
+                ))}
+              </select>
+            )}
+            {archiveFilters.scope === "local" && archiveFilters.state && (
+              <select
+                value={archiveFilters.lga}
+                onChange={(e) => handleArchiveLgaChange(e.target.value)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+              >
+                <option value="">All LGAs</option>
+                {archiveLgaOptions.map((lgaName) => (
+                  <option key={lgaName} value={lgaName}>{lgaName}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <div className="mt-4 space-y-2">
             {loadingSessions ? (
               <div className="text-sm text-slate-500 animate-pulse">Loading sessions…</div>
-            ) : sessions.filter((period) => period.resultsPublished || (!isActive(period) && !isUpcoming(period) && !awaitingPublish(period))).length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
-                Once results are published, sessions will appear here for reference.
-              </div>
+            ) : !hasArchiveSessions ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">Once results are published, sessions will appear here for reference.</div>
+            ) : !archiveHasMatches ? (
+              <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-700">No sessions match the current filters.</div>
             ) : (
-              sessions
-                .filter((period) => period.resultsPublished || (!isActive(period) && !isUpcoming(period) && !awaitingPublish(period)))
+              filteredArchiveSessions
                 .map((period) => (
                   <button
                     key={period.id}
@@ -1925,6 +2176,16 @@ export default function AdminPage() {
           )}
         </div>
       </section>
+      )}
+
+
+      {tab === "analytics" && (
+        <AnalyticsDashboard
+          data={analytics}
+          loading={analyticsLoading}
+          error={analyticsError}
+          onRefresh={() => loadAnalytics({ suppressErrors: false })}
+        />
       )}
 
 
@@ -2628,6 +2889,156 @@ function LivePanel({ live, refresh, viewerRole, onEnd }) {
           ))
         )}
       </div>
+    </section>
+  );
+}
+
+function AnalyticsDashboard({ data, loading, error, onRefresh }) {
+  const totals = data?.totals || {};
+  const scopeBreakdown = data?.scopeBreakdown || [];
+  const topStates = data?.topStates || [];
+  const recentSessions = data?.recentSessions || [];
+
+  const maxScopeVotes = scopeBreakdown.reduce((max, row) => Math.max(max, Number(row.votes || 0)), 0);
+  const maxStateShare = topStates.reduce((max, row) => Math.max(max, Number(row.share || 0)), 0) || 100;
+  const maxTurnout = recentSessions.reduce((max, row) => Math.max(max, Number(row.turnout || 0)), 0) || 100;
+
+  const scopeLabel = (value) => {
+    const normalized = (value || "").toLowerCase();
+    if (normalized === "national") return "National";
+    if (normalized === "state") return "State";
+    if (normalized === "local") return "Local";
+    return value || "Unknown";
+  };
+
+  return (
+    <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Analytics overview</h2>
+          <p className="text-sm text-slate-500">Turnout, participation, and voter distribution insights.</p>
+        </div>
+        <button type="button" onClick={onRefresh} className="btn-secondary px-4 py-2 text-xs">
+          Refresh analytics
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="mt-6 text-sm text-slate-500 animate-pulse">Generating analytics…</div>
+      ) : error ? (
+        <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600">{error}</div>
+      ) : !data ? (
+        <div className="mt-6 text-sm text-slate-500">Analytics will appear once voters start participating.</div>
+      ) : (
+        <>
+          <div className="mt-6 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            <StatPill label="Registered users" value={totals.users || 0} tone="sky" />
+            <StatPill label="Eligible voters" value={totals.voters || 0} tone="emerald" />
+            <StatPill label="Admins" value={totals.admins || 0} tone="amber" />
+            <StatPill label="Super admins" value={totals.superAdmins || 0} tone="emerald" />
+            <StatPill label="Votes cast" value={totals.votesCast || 0} tone="sky" />
+            <StatPill label="Live sessions" value={totals.activeSessions || 0} tone="emerald" />
+            <StatPill label="Published sessions" value={totals.publishedSessions || 0} tone="amber" />
+          </div>
+
+          <div className="mt-8 grid gap-6 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900">Participation by scope</h3>
+              {scopeBreakdown.length === 0 ? (
+                <p className="mt-3 text-sm text-slate-500">No sessions recorded yet.</p>
+              ) : (
+                <ul className="mt-3 space-y-3 text-sm text-slate-600">
+                  {scopeBreakdown.map((row) => {
+                    const votePercent = maxScopeVotes > 0 ? Math.max(6, (Number(row.votes || 0) / maxScopeVotes) * 100) : 0;
+                    return (
+                      <li key={row.scope} className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-slate-900">{scopeLabel(row.scope)}</span>
+                          <span className="text-xs text-slate-500">
+                            {row.sessions} session{row.sessions === 1 ? "" : "s"} • {row.votes} vote{row.votes === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <div className="mt-2 h-2 rounded-full bg-slate-200">
+                          <div
+                            className="h-full rounded-full bg-indigo-500"
+                            style={{ width: `${votePercent}%` }}
+                          />
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900">Top states by voters</h3>
+              {topStates.length === 0 ? (
+                <p className="mt-3 text-sm text-slate-500">State participation data will appear as voters register.</p>
+              ) : (
+                <ul className="mt-3 space-y-3 text-sm text-slate-600">
+                  {topStates.map((row) => {
+                    const sharePercent = maxStateShare > 0 ? Math.max(6, (Number(row.share || 0) / maxStateShare) * 100) : 0;
+                    return (
+                      <li key={row.state} className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-slate-900">{row.state}</span>
+                          <span className="text-xs text-slate-500">{row.voters} voters • {row.share}%</span>
+                        </div>
+                        <div className="mt-2 h-2 rounded-full bg-slate-200">
+                          <div
+                            className="h-full rounded-full bg-emerald-500"
+                            style={{ width: `${sharePercent}%` }}
+                          />
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <h3 className="text-sm font-semibold text-slate-900">Recent session turnout</h3>
+            {recentSessions.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-500">No session results recorded yet.</p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {recentSessions.map((session) => {
+                  const turnoutPercent = session.turnout === null ? null : Math.max(6, (session.turnout / maxTurnout) * 100);
+                  return (
+                    <div key={session.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{session.title || `Session #${session.id}`}</p>
+                          <p className="text-xs text-slate-500">{scopeLabel(session.scope)}{session.scopeState ? ` • ${session.scopeState}` : ""}{session.scope === "local" && session.scopeLGA ? ` • ${session.scopeLGA}` : ""}</p>
+                        </div>
+                        <div className="text-right text-xs text-slate-500">
+                          <p>Votes: <span className="font-semibold text-slate-900">{session.votes}</span></p>
+                          <p>Eligible: <span className="font-semibold text-slate-900">{session.eligible}</span></p>
+                          <p>Turnout: <span className="font-semibold text-slate-900">{session.turnout === null ? "—" : `${session.turnout}%`}</span></p>
+                        </div>
+                      </div>
+                      {session.turnout !== null && (
+                        <div className="mt-3 h-2 rounded-full bg-slate-200">
+                          <div
+                            className="h-full rounded-full bg-purple-500"
+                            style={{ width: `${turnoutPercent}%` }}
+                          />
+                        </div>
+                      )}
+                      <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-400">
+                        Ended {new Date(session.endTime).toLocaleString()} {session.forcedEnded ? "• Ended early" : session.resultsPublished ? "• Results published" : ""}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }

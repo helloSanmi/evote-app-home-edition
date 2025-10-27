@@ -264,6 +264,7 @@ async function ensureNotificationTables() {
       type VARCHAR(60) NOT NULL,
       title VARCHAR(200) NOT NULL,
       message TEXT NULL,
+      audience VARCHAR(20) NOT NULL DEFAULT 'user',
       scope VARCHAR(20) NOT NULL DEFAULT 'global',
       scopeState VARCHAR(120) NULL,
       scopeLGA VARCHAR(120) NULL,
@@ -276,6 +277,19 @@ async function ensureNotificationTables() {
       CONSTRAINT fk_notification_period FOREIGN KEY (periodId) REFERENCES VotingPeriod(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  const [[audienceColumn]] = await q(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'NotificationEvent'
+        AND COLUMN_NAME = 'audience'`
+  );
+  if (!audienceColumn) {
+    await q(`ALTER TABLE NotificationEvent ADD COLUMN audience VARCHAR(20) NOT NULL DEFAULT 'user' AFTER message`);
+  }
+
+  await ensureIndex("NotificationEvent", "idx_notification_audience", "ALTER TABLE NotificationEvent ADD KEY idx_notification_audience (audience)");
 
   await q(`
     CREATE TABLE IF NOT EXISTS NotificationReceipt (

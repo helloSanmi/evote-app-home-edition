@@ -12,6 +12,8 @@ export default function Results() {
   const [selectedSessionId, setSelectedSessionId] = useState(null);
   const [rows, setRows] = useState([]);
   const [participation, setParticipation] = useState(null);
+  const createFilterState = () => ({ scope: "all", state: "", lga: "" });
+  const [filters, setFilters] = useState(() => createFilterState());
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -106,6 +108,7 @@ export default function Results() {
     setRows([]);
     setSelectedSessionId(null);
     setParticipation(null);
+    setFilters(createFilterState());
   }, [allowed]);
 
   const sortedSessions = useMemo(() => {
@@ -113,16 +116,97 @@ export default function Results() {
     return [...sessions].sort((a, b) => new Date(b.endTime) - new Date(a.endTime));
   }, [sessions]);
 
+  const sessionMatchesFilters = (session, currentFilters) => {
+    if (!session) return false;
+    const scope = (session.scope || "national").toLowerCase();
+    if (currentFilters.scope !== "all" && scope !== currentFilters.scope) return false;
+    if ((currentFilters.scope === "state" || currentFilters.scope === "local") && currentFilters.state) {
+      const sessionState = (session.scopeState || "").trim().toLowerCase();
+      if (sessionState !== currentFilters.state.trim().toLowerCase()) return false;
+    }
+    if (currentFilters.scope === "local" && currentFilters.lga) {
+      const sessionLga = (session.scopeLGA || "").trim().toLowerCase();
+      if (sessionLga !== currentFilters.lga.trim().toLowerCase()) return false;
+    }
+    return true;
+  };
+
+  const filteredSessions = useMemo(() => (
+    sortedSessions.filter((session) => sessionMatchesFilters(session, filters))
+  ), [sortedSessions, filters]);
+
   const selectedSession = useMemo(() => {
-    if (!sortedSessions.length) return null;
-    const match = sortedSessions.find((session) => session.id === selectedSessionId);
-    return match || sortedSessions[0];
-  }, [sortedSessions, selectedSessionId]);
+    if (!filteredSessions.length) return null;
+    const match = filteredSessions.find((session) => session.id === selectedSessionId);
+    return match || filteredSessions[0];
+  }, [filteredSessions, selectedSessionId]);
 
   const displayRows = useMemo(() => {
     if (!Array.isArray(rows)) return [];
     return [...rows].sort((a, b) => b.votes - a.votes);
   }, [rows]);
+
+  const scopeFilterOptions = useMemo(() => [
+    { value: "all", label: "All scopes" },
+    { value: "national", label: "National / Presidential" },
+    { value: "state", label: "State" },
+    { value: "local", label: "Local Government" },
+  ], []);
+
+  const stateOptions = useMemo(() => {
+    const set = new Set();
+    sortedSessions.forEach((session) => {
+      const scope = (session.scope || "").toLowerCase();
+      if ((scope === "state" || scope === "local") && session.scopeState) {
+        set.add(session.scopeState.trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [sortedSessions]);
+
+  const lgaOptions = useMemo(() => {
+    if (!filters.state) return [];
+    const normalized = filters.state.trim().toLowerCase();
+    const set = new Set();
+    sortedSessions.forEach((session) => {
+      if ((session.scope || "").toLowerCase() === "local" && (session.scopeState || "").trim().toLowerCase() === normalized && session.scopeLGA) {
+        set.add(session.scopeLGA.trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [filters.state, sortedSessions]);
+
+  const handleScopeFilterChange = (value) => {
+    setFilters((prev) => {
+      const next = { ...prev, scope: value };
+      if (value === "all" || value === "national") {
+        next.state = "";
+        next.lga = "";
+      } else if (value === "state") {
+        next.lga = "";
+      }
+      return next;
+    });
+  };
+
+  const handleStateFilterChange = (value) => {
+    setFilters((prev) => ({ ...prev, state: value, lga: "" }));
+  };
+
+  const handleLgaFilterChange = (value) => {
+    setFilters((prev) => ({ ...prev, lga: value }));
+  };
+
+  useEffect(() => {
+    if (!filteredSessions.length) {
+      if (selectedSessionId !== null) setSelectedSessionId(null);
+      return;
+    }
+    const exists = filteredSessions.some((session) => session.id === selectedSessionId);
+    if (!exists) {
+      setSelectedSessionId(filteredSessions[0].id);
+    }
+  }, [filteredSessions, selectedSessionId]);
 
   if (!accessChecked || (accessChecked && !allowed)) {
     return null;
@@ -154,28 +238,69 @@ export default function Results() {
       <div className="space-y-4 md:grid md:grid-cols-[minmax(0,260px)_1fr] md:gap-4 md:space-y-0">
         <aside className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
           <h2 className="px-2 text-sm font-semibold text-slate-700">Published sessions</h2>
+          <div className="flex flex-wrap gap-2 px-2">
+            <select
+              value={filters.scope}
+              onChange={(e) => handleScopeFilterChange(e.target.value)}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+            >
+              {scopeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            {filters.scope !== "all" && filters.scope !== "national" && (
+              <select
+                value={filters.state}
+                onChange={(e) => handleStateFilterChange(e.target.value)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+              >
+                <option value="">All states</option>
+                {stateOptions.map((state) => (
+                  <option key={state} value={state}>{state}</option>
+                ))}
+              </select>
+            )}
+            {filters.scope === "local" && filters.state && (
+              <select
+                value={filters.lga}
+                onChange={(e) => handleLgaFilterChange(e.target.value)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+              >
+                <option value="">All LGAs</option>
+                {lgaOptions.map((lga) => (
+                  <option key={lga} value={lga}>{lga}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <div className="space-y-1">
-            {sortedSessions.map((session) => {
-              const active = selectedSession && selectedSession.id === session.id;
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => setSelectedSessionId(session.id)}
-                  className={`w-full rounded-xl border px-3 py-3 text-left transition ${
-                    active ? "border-indigo-300 bg-indigo-50 shadow" : "border-slate-200 bg-white hover:border-indigo-200"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-slate-900">{session.title || `Session #${session.id}`}</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-600">
-                      {session.scope}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500">{new Date(session.endTime).toLocaleString()}</p>
-                </button>
-              );
-            })}
+            {filteredSessions.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">
+                No sessions match the current filters.
+              </div>
+            ) : (
+              filteredSessions.map((session) => {
+                const active = selectedSession && selectedSession.id === session.id;
+                return (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => setSelectedSessionId(session.id)}
+                    className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                      active ? "border-indigo-300 bg-indigo-50 shadow" : "border-slate-200 bg-white hover:border-indigo-200"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-slate-900">{session.title || `Session #${session.id}`}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-600">
+                        {session.scope}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">{new Date(session.endTime).toLocaleString()}</p>
+                  </button>
+                );
+              })
+            )}
           </div>
         </aside>
 

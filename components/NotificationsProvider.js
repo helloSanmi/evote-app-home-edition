@@ -21,6 +21,7 @@ function normalizeNotification(raw) {
     type: raw.type || "system",
     title: raw.title || "Notification",
     message: raw.message || "",
+    audience: (raw.audience || "user").toLowerCase(),
     scope: (raw.scope || "global").toLowerCase(),
     scopeState: raw.scopeState || null,
     scopeLGA: raw.scopeLGA || null,
@@ -36,6 +37,7 @@ export function NotificationsProvider({ children }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hasSession, setHasSession] = useState(false);
+  const [audience, setAudience] = useState("user");
   const fetchedRef = useRef(false);
 
   useEffect(() => {
@@ -43,6 +45,12 @@ export function NotificationsProvider({ children }) {
     const evaluate = () => {
       const token = localStorage.getItem("token");
       setHasSession(Boolean(token));
+      const storedRole = (localStorage.getItem("role") || "user").toLowerCase();
+      if (storedRole === "admin" || storedRole === "super-admin") {
+        setAudience("admin");
+      } else {
+        setAudience("user");
+      }
       if (!token) {
         setNotifications([]);
         fetchedRef.current = false;
@@ -54,6 +62,11 @@ export function NotificationsProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    if (!hasSession) return;
+    fetchedRef.current = false;
+  }, [audience, hasSession]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     if (!hasSession) return;
     if (fetchedRef.current) return;
@@ -61,7 +74,7 @@ export function NotificationsProvider({ children }) {
     (async () => {
       setLoading(true);
       try {
-        const data = await apiGet("/api/notifications");
+        const data = await apiGet(`/api/notifications?audience=${audience}`);
         const normalized = Array.isArray(data)
           ? data.map((item) => normalizeNotification(item)).filter(Boolean)
           : [];
@@ -72,7 +85,7 @@ export function NotificationsProvider({ children }) {
         setLoading(false);
       }
     })();
-  }, [hasSession]);
+  }, [hasSession, audience]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -81,6 +94,7 @@ export function NotificationsProvider({ children }) {
     const handler = (payload) => {
       const normalized = normalizeNotification(payload);
       if (!normalized) return;
+      if (normalized.audience && normalized.audience !== audience) return;
       setNotifications((prev) => {
         const exists = prev.some((item) => item.id === normalized.id);
         if (exists) {
@@ -91,7 +105,7 @@ export function NotificationsProvider({ children }) {
     };
     socket.on("notification:new", handler);
     return () => socket.off("notification:new", handler);
-  }, [hasSession]);
+  }, [hasSession, audience]);
 
   const unread = useMemo(
     () => notifications.filter((item) => !item.readAt).length,
@@ -102,7 +116,7 @@ export function NotificationsProvider({ children }) {
     if (!hasSession) return;
     setLoading(true);
     try {
-      const data = await apiGet("/api/notifications");
+      const data = await apiGet(`/api/notifications?audience=${audience}`);
       const normalized = Array.isArray(data)
         ? data.map((item) => normalizeNotification(item)).filter(Boolean)
         : [];
@@ -172,8 +186,9 @@ export function NotificationsProvider({ children }) {
       clearAll,
       markAllRead,
       hasSession,
+      audience,
     }),
-    [notifications, unread, loading, hasSession]
+    [notifications, unread, loading, hasSession, audience]
   );
 
   return (

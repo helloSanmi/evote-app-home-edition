@@ -11,11 +11,17 @@ router.get("/", requireAuth, async (req, res) => {
   try {
     const limitRaw = Number(req.query.limit || DEFAULT_LIMIT);
     const limit = Math.min(Math.max(limitRaw || DEFAULT_LIMIT, 1), MAX_LIMIT);
+    const audienceReq = String(req.query.audience || "").toLowerCase();
+    const audience = audienceReq === "admin" ? "admin" : "user";
+    const audienceClause = audience === "admin"
+      ? "e.audience = 'admin'"
+      : "(e.audience IS NULL OR e.audience = '' OR e.audience = 'user')";
     const sql = `
       SELECT e.id,
              e.type,
              e.title,
              e.message,
+             e.audience,
              e.scope,
              e.scopeState,
              e.scopeLGA,
@@ -28,7 +34,8 @@ router.get("/", requireAuth, async (req, res) => {
       LEFT JOIN NotificationReceipt r
         ON r.notificationId = e.id
        AND r.userId = ?
-      WHERE r.clearedAt IS NULL
+      WHERE ${audienceClause}
+        AND (r.clearedAt IS NULL)
       ORDER BY e.createdAt DESC, e.id DESC
       LIMIT ${limit}
     `;

@@ -172,7 +172,7 @@ export default function Vote() {
   const youVotedId = selectedStatus?.youVoted?.id;
   const hasVoted = !!selectedStatus?.hasVoted;
   const isSessionActive = (session, referenceTime = clock) => {
-    if (!session) return false;
+    if (!session || session.forcedEnded || session.resultsPublished) return false;
     const start = new Date(session.startTime).getTime();
     const end = new Date(session.endTime).getTime();
     return referenceTime >= start && referenceTime <= end;
@@ -245,12 +245,16 @@ export default function Vote() {
                     ? "Live"
                     : timing.phase === "upcoming"
                       ? "Starting soon"
-                      : "Closed";
+                      : timing.forcedEnded
+                        ? "Ended early"
+                        : "Closed";
                   const statusTone = timing.phase === "live"
                     ? "bg-emerald-100 text-emerald-700"
                     : timing.phase === "upcoming"
                       ? "bg-indigo-100 text-indigo-700"
-                      : "bg-slate-200 text-slate-600";
+                      : timing.forcedEnded
+                        ? "bg-rose-100 text-rose-600"
+                        : "bg-slate-200 text-slate-600";
                   return (
                     <button
                       key={session.id}
@@ -265,7 +269,7 @@ export default function Vote() {
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusTone}`}>{statusLabel}</span>
                       </div>
                       <p className="mt-1 text-xs text-slate-500">{new Date(session.startTime).toLocaleString()}</p>
-                      {timing.phase !== "closed" && timing.countdownMs > 0 && (
+                      {!timing.forcedEnded && timing.phase !== "closed" && timing.countdownMs > 0 && (
                         <p className="mt-1 text-[11px] text-slate-500">
                           {timing.phase === "live" ? "Ends in" : "Starts in"}{" "}
                           <span className="font-semibold text-slate-700">{formatCountdown(timing.countdownMs)}</span>
@@ -285,7 +289,11 @@ export default function Vote() {
                     <div>
                       <h2 className="text-lg font-semibold text-slate-900">{selectedSession.title || `Session #${selectedSession.id}`}</h2>
                       <p className="text-xs text-slate-500">{new Date(selectedSession.startTime).toLocaleString()} to {new Date(selectedSession.endTime).toLocaleString()}</p>
-                      {selectedTiming.phase !== "closed" && selectedTiming.countdownMs > 0 && (
+                      {selectedTiming.forcedEnded ? (
+                        <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-rose-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-600">
+                          Ended early by administrators
+                        </span>
+                      ) : selectedTiming.phase !== "closed" && selectedTiming.countdownMs > 0 && (
                         <span
                           className={`mt-2 inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
                             selectedTiming.phase === "live" ? "bg-emerald-50 text-emerald-700" : "bg-indigo-50 text-indigo-700"
@@ -309,6 +317,10 @@ export default function Vote() {
                       <p className="font-semibold text-emerald-700">
                         Your vote has been recorded and ballot details are now hidden to protect you from coercion or vote buying.
                       </p>
+                    ) : selectedTiming.forcedEnded ? (
+                      <p className="font-semibold text-rose-600">
+                        Voting for this session was ended early by administrators. No further ballots can be cast.
+                      </p>
                     ) : (
                       <p>Select your preferred candidate. You can only vote once.</p>
                     )}
@@ -325,6 +337,7 @@ export default function Vote() {
                         const isChoice = youVotedId === candidate.id;
                         const sessionActive = isSessionActive(selectedSession, clock);
                         const sessionNotStarted = selectedSession && clock < new Date(selectedSession.startTime).getTime();
+                        const endedEarly = selectedSession?.forcedEnded;
                         const disabledChoice = busy || hasVoted || !sessionActive;
                         return (
                           <button
@@ -354,9 +367,11 @@ export default function Vote() {
                                   ? "Tap to vote"
                                   : hasVoted
                                     ? "Vote recorded"
-                                    : sessionNotStarted
-                                      ? "Starting soon"
-                                      : "Voting closed"}
+                                    : endedEarly
+                                      ? "Ended early"
+                                      : sessionNotStarted
+                                        ? "Starting soon"
+                                        : "Voting closed"}
                             </div>
                           </button>
                         );

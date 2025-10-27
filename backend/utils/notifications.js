@@ -1,10 +1,16 @@
 const { q } = require("../db");
 
 const VALID_SCOPES = new Set(["global", "national", "state", "local"]);
+const VALID_AUDIENCE = new Set(["user", "admin"]);
 
 function sanitizeScope(scope) {
   const normalized = (scope || "").toLowerCase();
   return VALID_SCOPES.has(normalized) ? normalized : "global";
+}
+
+function sanitizeAudience(audience) {
+  const normalized = (audience || "").toLowerCase();
+  return VALID_AUDIENCE.has(normalized) ? normalized : "user";
 }
 
 function parseMetadata(raw) {
@@ -35,6 +41,7 @@ function mapRow(row) {
     type: row.type,
     title: row.title,
     message: row.message,
+    audience: sanitizeAudience(row.audience),
     scope: sanitizeScope(row.scope),
     scopeState: row.scopeState || null,
     scopeLGA: row.scopeLGA || null,
@@ -48,13 +55,15 @@ function mapRow(row) {
 
 async function persistNotification(event) {
   const scope = sanitizeScope(event.scope);
+  const audience = sanitizeAudience(event.audience || event.targetAudience || event.audienceRole);
   const [result] = await q(
-    `INSERT INTO NotificationEvent (type, title, message, scope, scopeState, scopeLGA, periodId, metadata)
-     VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO NotificationEvent (type, title, message, audience, scope, scopeState, scopeLGA, periodId, metadata)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     [
       event.type,
       event.title,
       event.message || null,
+      audience,
       scope,
       scope !== "global" ? event.scopeState || null : null,
       scope === "local" ? event.scopeLGA || null : (scope === "state" ? null : null),
@@ -65,7 +74,7 @@ async function persistNotification(event) {
   const insertedId = result?.insertId;
   if (!insertedId) throw new Error("Failed to persist notification event");
   const [[row]] = await q(
-    `SELECT id, type, title, message, scope, scopeState, scopeLGA, periodId, metadata, createdAt
+    `SELECT id, type, title, message, audience, scope, scopeState, scopeLGA, periodId, metadata, createdAt
      FROM NotificationEvent WHERE id=? LIMIT 1`,
     [insertedId]
   );
@@ -87,6 +96,9 @@ function emitNotification(io, notification, userIds) {
 async function notify(io, event, options = {}) {
   if (!event?.type || !event?.title) {
     throw new Error("Notification requires at least type and title");
+  }
+  if (!event.audience && options.audience) {
+    event.audience = options.audience;
   }
   const notification = await persistNotification(event);
   emitNotification(io, notification, options.userIds || event.userIds);

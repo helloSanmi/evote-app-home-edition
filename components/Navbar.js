@@ -102,6 +102,7 @@ export default function Navbar() {
   const guestLinks = [
     { href: "/login", label: "Login" },
     { href: "/register", label: "Register" },
+    { href: "/how-it-works", label: "How it works" },
   ];
 
   if (!mounted) return null;

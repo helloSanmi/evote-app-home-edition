@@ -10,6 +10,32 @@ const { buildMetricsSnapshot } = require("../utils/telemetry");
 const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
 const { notify } = require("../utils/notifications");
 
+const actorLabel = (user) => {
+  if (!user) return "An admin";
+  if (user.username) return user.username;
+  if (user.email) return user.email;
+  if (user.id) return `Admin #${user.id}`;
+  return "An admin";
+};
+
+async function notifyAdminAction(io, req, event) {
+  if (!io || !event) return;
+  try {
+    await notify(io, {
+      audience: "admin",
+      ...event,
+      metadata: {
+        ...(event.metadata || {}),
+        actorId: req.user?.id || null,
+        actorUsername: req.user?.username || null,
+        actorEmail: req.user?.email || null,
+      },
+    });
+  } catch (err) {
+    console.error("admin notify action:", err);
+  }
+}
+
 // ---------- candidate image upload ----------
 const upCand = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, ensureDirSync("candidates")),
@@ -178,6 +204,7 @@ router.post("/voting-period", requireAuth, requireAdmin, async (req, res) => {
     const io = req.app.get("io");
     io?.emit("periodCreated", { periodId: insertId });
     await notify(io, {
+      audience: "user",
       type: "session.created",
       title: title ? `${title.trim()} scheduled` : "Voting session scheduled",
       message: `Voting opens on ${new Date(start).toLocaleString()}`,
@@ -191,6 +218,19 @@ router.post("/voting-period", requireAuth, requireAdmin, async (req, res) => {
         description: description || null,
         startTime: new Date(start).toISOString(),
         endTime: new Date(end).toISOString(),
+        scope: electionScope,
+        scopeState: scopeState || null,
+        scopeLGA: scopeLGA || null,
+      },
+    });
+    await notifyAdminAction(io, req, {
+      type: "admin.session.created",
+      title: "Session scheduled",
+      message: `${actorLabel(req.user)} scheduled ${title ? `"${title.trim()}"` : `session #${insertId}`}.`,
+      scope: "global",
+      periodId: insertId,
+      metadata: {
+        periodId: insertId,
         scope: electionScope,
         scopeState: scopeState || null,
         scopeLGA: scopeLGA || null,
@@ -259,6 +299,7 @@ router.post("/periods/:id/reschedule", requireAuth, requireRole(["super-admin"])
     const io = req.app.get("io");
     io?.emit("periodUpdated", { periodId: id });
     await notify(io, {
+      audience: "user",
       type: "session.rescheduled",
       title: period.title ? `${period.title} rescheduled` : "Voting session rescheduled",
       message: `New start: ${newStart.toLocaleString()}`,
@@ -269,6 +310,20 @@ router.post("/periods/:id/reschedule", requireAuth, requireRole(["super-admin"])
       metadata: {
         periodId: id,
         title: period.title || null,
+        previousStart: new Date(period.startTime).toISOString(),
+        previousEnd: new Date(period.endTime).toISOString(),
+        startTime: newStart.toISOString(),
+        endTime: newEnd.toISOString(),
+      },
+    });
+    await notifyAdminAction(io, req, {
+      type: "admin.session.rescheduled",
+      title: "Session rescheduled",
+      message: `${actorLabel(req.user)} moved ${period.title || `session #${id}`} to ${newStart.toLocaleString()}.`,
+      scope: "global",
+      periodId: id,
+      metadata: {
+        periodId: id,
         previousStart: new Date(period.startTime).toISOString(),
         previousEnd: new Date(period.endTime).toISOString(),
         startTime: newStart.toISOString(),
@@ -315,6 +370,7 @@ router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => 
     const io = req.app.get("io");
     io?.emit("periodEnded", { periodId: period.id, forced: true });
     await notify(io, {
+      audience: "user",
       type: "session.ended",
       title: period.title ? `${period.title} ended early` : "Voting session ended",
       message: "Administrators ended this election ahead of schedule.",
@@ -325,6 +381,19 @@ router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => 
       metadata: {
         periodId: period.id,
         title: period.title || null,
+        scheduledEndTime: new Date(period.endTime).toISOString(),
+        endedAt: new Date().toISOString(),
+        forced: true,
+      },
+    });
+    await notifyAdminAction(io, req, {
+      type: "admin.session.ended",
+      title: "Session ended early",
+      message: `${actorLabel(req.user)} ended ${period.title || `session #${period.id}`} ahead of schedule.`,
+      scope: "global",
+      periodId: period.id,
+      metadata: {
+        periodId: period.id,
         scheduledEndTime: new Date(period.endTime).toISOString(),
         endedAt: new Date().toISOString(),
         forced: true,
@@ -370,6 +439,7 @@ router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
     const io = req.app.get("io");
     io?.emit("resultsPublished", { periodId: period.id });
     await notify(io, {
+      audience: "user",
       type: "results.published",
       title: period.title ? `${period.title} results published` : "Election results are now available",
       message: "Final tallies are ready to review.",
@@ -382,6 +452,17 @@ router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
         title: period.title || null,
         publishedAt: new Date().toISOString(),
         endTime: new Date(period.endTime).toISOString(),
+      },
+    });
+    await notifyAdminAction(io, req, {
+      type: "admin.results.published",
+      title: "Results published",
+      message: `${actorLabel(req.user)} published results for ${period.title || `session #${period.id}`}.`,
+      scope: "global",
+      periodId: period.id,
+      metadata: {
+        periodId: period.id,
+        publishedAt: new Date().toISOString(),
       },
     });
     res.json({ success: true, periodId: period.id });
@@ -408,6 +489,166 @@ router.get("/audit", requireAuth, requireAdmin, async (req, res) => {
   } catch (e) {
     console.error("admin/audit:", e);
     res.status(500).json({ error: "SERVER" });
+  }
+});
+
+router.get("/analytics/summary", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const [[userTotals]] = await q(`
+      SELECT
+        COUNT(*) AS totalUsers,
+        SUM(CASE WHEN role='user' THEN 1 ELSE 0 END) AS totalVoters,
+        SUM(CASE WHEN role='admin' THEN 1 ELSE 0 END) AS totalAdmins,
+        SUM(CASE WHEN role='super-admin' THEN 1 ELSE 0 END) AS totalSuperAdmins
+      FROM Users
+    `);
+
+    const [[voteTotals]] = await q(`SELECT COUNT(*) AS totalVotes FROM Votes`);
+    const [[activeSessions]] = await q(`
+      SELECT COUNT(*) AS activeSessions
+        FROM VotingPeriod
+       WHERE forcedEnded=0
+         AND resultsPublished=0
+         AND startTime <= UTC_TIMESTAMP()
+         AND endTime >= UTC_TIMESTAMP()
+    `);
+    const [[publishedSessions]] = await q(`
+      SELECT COUNT(*) AS publishedSessions
+        FROM VotingPeriod
+       WHERE resultsPublished=1
+    `);
+
+    const [scopeRows] = await q(`
+      SELECT COALESCE(vp.scope,'national') AS scope,
+             COUNT(*) AS sessions,
+             SUM(COALESCE(vt.voteCount,0)) AS votes
+        FROM VotingPeriod vp
+        LEFT JOIN (
+          SELECT periodId, COUNT(*) AS voteCount
+            FROM Votes
+           GROUP BY periodId
+        ) vt ON vt.periodId = vp.id
+       GROUP BY scope
+    `);
+
+    const [stateCountsRows] = await q(`
+      SELECT
+        LOWER(COALESCE(state,'')) AS stateKey,
+        COALESCE(NULLIF(TRIM(state),''),'Unknown') AS stateLabel,
+        COUNT(*) AS total
+      FROM Users
+      WHERE role='user'
+      GROUP BY stateKey, stateLabel
+    `);
+
+    const [lgaCountsRows] = await q(`
+      SELECT
+        LOWER(COALESCE(state,'')) AS stateKey,
+        LOWER(COALESCE(residenceLGA,'')) AS lgaKey,
+        COUNT(*) AS total
+      FROM Users
+      WHERE role='user'
+      GROUP BY stateKey, lgaKey
+    `);
+
+    const [recentSessionsRows] = await q(`
+      SELECT vp.id,
+             vp.title,
+             vp.scope,
+             vp.scopeState,
+             vp.scopeLGA,
+             vp.startTime,
+             vp.endTime,
+             vp.resultsPublished,
+             vp.forcedEnded,
+             COALESCE(vt.voteCount,0) AS votes
+        FROM VotingPeriod vp
+        LEFT JOIN (
+          SELECT periodId, COUNT(*) AS voteCount
+            FROM Votes
+           GROUP BY periodId
+        ) vt ON vt.periodId = vp.id
+       ORDER BY vp.endTime DESC, vp.id DESC
+       LIMIT 10
+    `);
+
+    const totalVoters = Number(userTotals?.totalVoters || 0);
+
+    const stateCountMap = {};
+    stateCountsRows.forEach((row) => {
+      const key = (row.stateKey || "").trim();
+      if (!key) return;
+      stateCountMap[key] = Number(row.total || 0);
+    });
+
+    const lgaCountMap = {};
+    lgaCountsRows.forEach((row) => {
+      const stateKey = (row.stateKey || "").trim();
+      const lgaKey = (row.lgaKey || "").trim();
+      if (!stateKey || !lgaKey) return;
+      lgaCountMap[`${stateKey}|${lgaKey}`] = Number(row.total || 0);
+    });
+
+    const recentSessions = recentSessionsRows.map((row) => {
+      const scope = (row.scope || "national").toLowerCase();
+      const stateKey = (row.scopeState || "").trim().toLowerCase();
+      const lgaKey = (row.scopeLGA || "").trim().toLowerCase();
+      let eligible = totalVoters;
+      if (scope === "state") {
+        eligible = stateCountMap[stateKey] || 0;
+      } else if (scope === "local") {
+        eligible = lgaCountMap[`${stateKey}|${lgaKey}`] || 0;
+      }
+      const votes = Number(row.votes || 0);
+      const turnout = eligible > 0 ? Math.min(100, (votes / eligible) * 100) : null;
+      return {
+        id: row.id,
+        title: row.title,
+        scope,
+        scopeState: row.scopeState,
+        scopeLGA: row.scopeLGA,
+        startTime: row.startTime,
+        endTime: row.endTime,
+        resultsPublished: !!row.resultsPublished,
+        forcedEnded: !!row.forcedEnded,
+        votes,
+        eligible,
+        turnout: turnout === null ? null : Number(turnout.toFixed(2)),
+      };
+    });
+
+    const topStates = [...stateCountsRows]
+      .sort((a, b) => Number(b.total || 0) - Number(a.total || 0))
+      .slice(0, 8)
+      .map((row) => ({
+        state: row.stateLabel,
+        voters: Number(row.total || 0),
+        share: totalVoters > 0 ? Number(((row.total || 0) / totalVoters * 100).toFixed(2)) : 0,
+      }));
+
+    const scopeBreakdown = scopeRows.map((row) => ({
+      scope: (row.scope || "national").toLowerCase(),
+      sessions: Number(row.sessions || 0),
+      votes: Number(row.votes || 0),
+    }));
+
+    res.json({
+      totals: {
+        users: Number(userTotals?.totalUsers || 0),
+        voters: totalVoters,
+        admins: Number(userTotals?.totalAdmins || 0),
+        superAdmins: Number(userTotals?.totalSuperAdmins || 0),
+        votesCast: Number(voteTotals?.totalVotes || 0),
+        activeSessions: Number(activeSessions?.activeSessions || 0),
+        publishedSessions: Number(publishedSessions?.publishedSessions || 0),
+      },
+      scopeBreakdown,
+      topStates,
+      recentSessions,
+    });
+  } catch (err) {
+    console.error("admin/analytics:", err);
+    res.status(500).json({ error: "SERVER", message: "Could not load analytics" });
   }
 });
 
@@ -456,6 +697,7 @@ router.post("/periods/cancel", requireAuth, requireRole(["super-admin"]), async 
     const io = req.app.get("io");
     io?.emit("periodCancelled", { periodId: pid });
     await notify(io, {
+      audience: "user",
       type: "session.cancelled",
       title: period.title ? `${period.title} cancelled` : "Voting session cancelled",
       message: "This election has been cancelled before it started.",
@@ -469,6 +711,17 @@ router.post("/periods/cancel", requireAuth, requireRole(["super-admin"]), async 
         startTime: new Date(period.startTime).toISOString(),
         endTime: new Date(period.endTime).toISOString(),
         status: "cancelled",
+      },
+    });
+    await notifyAdminAction(io, req, {
+      type: "admin.session.cancelled",
+      title: "Session cancelled",
+      message: `${actorLabel(req.user)} cancelled ${period.title || `session #${pid}`} before it started.`,
+      scope: "global",
+      periodId: pid,
+      metadata: {
+        periodId: pid,
+        startTime: new Date(period.startTime).toISOString(),
       },
     });
     res.json({ success: true, periodId: pid });
@@ -598,6 +851,7 @@ router.put("/voting-period/:id", requireAuth, requireRole(["super-admin"]), asyn
     const io = req.app.get("io");
     io?.emit("periodUpdated", { periodId: pid });
     await notify(io, {
+      audience: "user",
       type: "session.updated",
       title: next.title ? `${next.title} updated` : "Voting session updated",
       message: "Session details were updated by an administrator.",
@@ -624,6 +878,16 @@ router.put("/voting-period/:id", requireAuth, requireRole(["super-admin"]), asyn
           scopeLGA: normalizedScope === "local" ? (next.scopeLGA || null) : null,
           minAge: next.minAge,
         },
+      },
+    });
+    await notifyAdminAction(io, req, {
+      type: "admin.session.updated",
+      title: "Session updated",
+      message: `${actorLabel(req.user)} updated ${next.title || `session #${pid}`}.`,
+      scope: "global",
+      periodId: pid,
+      metadata: {
+        periodId: pid,
       },
     });
     res.json({ success: true, id: pid });
