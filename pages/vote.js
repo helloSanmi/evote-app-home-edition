@@ -190,7 +190,7 @@ export default function Vote() {
   if (sessions === null) {
     return (
       <div className="mx-auto flex min-h-[40vh] w-full max-w-5xl items-center justify-center px-4">
-        <div className="rounded-3xl border border-slate-200 bg-white px-10 py-12 text-center shadow-[0_35px_120px_-60px_rgba(15,23,42,0.55)] backdrop-blur">
+        <div className="rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-[0_35px_120px_-60px_rgba(15,23,42,0.55)] backdrop-blur sm:px-10 sm:py-12">
           <div className="animate-pulse text-sm text-slate-500">Loading available sessions…</div>
         </div>
       </div>
@@ -200,7 +200,7 @@ export default function Vote() {
   if (sessions.length === 0) {
     return (
       <div className="mx-auto flex min-h-[40vh] w-full max-w-5xl items-center justify-center px-4">
-        <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-10 py-12 text-center text-slate-600 shadow-sm">
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center text-slate-600 shadow-sm sm:px-10 sm:py-12">
           <h2 className="text-2xl font-semibold text-slate-900">No eligible sessions yet</h2>
           <p className="mt-2 text-sm text-slate-500">
             Stay tuned. Once a voting period opens for your region, it will appear here automatically.
@@ -218,8 +218,8 @@ export default function Vote() {
   return (
     <>
       {secureOverlay && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm px-6 text-center">
-          <div className="w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900/90 px-6 py-7 text-white shadow-2xl">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm px-4 text-center sm:px-6">
+          <div className="w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900/90 px-5 py-7 text-white shadow-2xl sm:px-6">
             <h3 className="text-lg font-semibold tracking-tight">Ballot secured</h3>
             <p className="mt-3 text-sm text-slate-200">
               Your vote has been locked in. We’ve hidden the ballot details so no one can capture or replay your selection.
@@ -230,7 +230,7 @@ export default function Vote() {
       )}
       <div className={`mx-auto w-full max-w-5xl space-y-4 px-4 py-6 ${hasVoted ? "select-none" : ""}`}>
         {sortedSessions.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center text-sm text-slate-500 shadow-sm">
+          <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-5 py-8 text-center text-sm text-slate-500 shadow-sm sm:px-6 sm:py-10">
             No eligible sessions yet. As soon as one opens, it will appear here.
           </div>
         ) : (

@@ -51,16 +51,13 @@ const ToastShell = ({ tone = "emerald", title, message }) => {
 };
 
 export function notifySuccess(msg) {
-  toast.dismiss();
   toast(<ToastShell tone="emerald" title="Done" message={msg} />, base);
 }
 
 export function notifyError(msg) {
-  toast.dismiss();
   toast(<ToastShell tone="rose" title="Heads up" message={msg} />, base);
 }
 
 export function notifyInfo(msg) {
-  toast.dismiss();
   toast(<ToastShell tone="indigo" title="Notice" message={msg} />, base);
 }

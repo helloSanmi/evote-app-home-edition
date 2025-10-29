@@ -7,6 +7,7 @@ const { q } = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { recordAuditEvent } = require("../utils/audit");
 const { restoreAccount } = require("../utils/retention");
+const emailService = require("../services/emailService");
 const {
   NAME_PART_PATTERN,
   FULL_NAME_PATTERN,
@@ -95,6 +96,9 @@ const flattenLower = (value) => {
 };
 
 const ROLE_PRIORITY = { user: 1, admin: 2, "super-admin": 3 };
+
+const AUTH_STATUS = (process.env.AUTH_STATUS || "on").trim().toLowerCase();
+const EMAIL_VERIFICATION_ENABLED = AUTH_STATUS !== "off";
 
 async function verifyMicrosoftIdToken(idToken) {
   if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID) {
@@ -226,9 +230,11 @@ router.post("/register", async (req, res) => {
     const safeNationality = normalizeLocale(nationality) || "Nigerian";
 
     const hash = await bcrypt.hash(String(password), 10);
+    const activationToken = EMAIL_VERIFICATION_ENABLED ? crypto.randomUUID() : null;
+    const activationExpires = EMAIL_VERIFICATION_ENABLED ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null;
     const [result] = await q(
-      `INSERT INTO Users (fullName, firstName, lastName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, gender, nationalId, voterCardNumber, residenceAddress, role, eligibilityStatus, hasVoted)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'user','pending',0)`,
+      `INSERT INTO Users (fullName, firstName, lastName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, gender, nationalId, voterCardNumber, residenceAddress, role, eligibilityStatus, hasVoted, activationToken, activationExpires, emailVerifiedAt)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'user','pending',0,?,?,?)`,
       [
         safeFullName,
         rawFirst,
@@ -245,20 +251,98 @@ router.post("/register", async (req, res) => {
         sanitizedNationalId,
         sanitizedVoterCard,
         safeAddress,
+        activationToken,
+        activationExpires,
+        EMAIL_VERIFICATION_ENABLED ? null : new Date(),
       ]
     );
-    if (result?.insertId) {
-      await recordAuditEvent({
-        actorId: null,
-        actorRole: "public",
-        action: "auth.register",
-        entityType: "user",
-        entityId: String(result.insertId),
-        after: { username, email },
-        ip: req.ip || null,
+    if (!result?.insertId) {
+      throw new Error("REGISTER_FAILED");
+    }
+
+    const userId = result.insertId;
+    const [[rawUser]] = await q(`SELECT * FROM Users WHERE id=?`, [userId]);
+    if (!rawUser) {
+      throw new Error("REGISTER_LOOKUP_FAILED");
+    }
+
+    const role = normalizeRole(rawUser);
+    const privileged = role === "admin" || role === "super-admin";
+    const setParts = [];
+    const setParams = [];
+    if (rawUser.role !== role) {
+      setParts.push("role=?");
+      setParams.push(role);
+    }
+    const isAdminFlag = privileged ? 1 : 0;
+    if (rawUser.isAdmin !== isAdminFlag) {
+      setParts.push("isAdmin=?");
+      setParams.push(isAdminFlag);
+    }
+    if (!EMAIL_VERIFICATION_ENABLED || privileged) {
+      if (rawUser.activationToken) setParts.push("activationToken=NULL");
+      if (rawUser.activationExpires) setParts.push("activationExpires=NULL");
+      if (!rawUser.emailVerifiedAt) setParts.push("emailVerifiedAt=UTC_TIMESTAMP()");
+      const status = (rawUser.eligibilityStatus || "").toLowerCase();
+      if (status !== "active") setParts.push("eligibilityStatus='active'");
+    }
+    if (setParts.length) {
+      await q(`UPDATE Users SET ${setParts.join(", ")} WHERE id=?`, [...setParams, userId]);
+    }
+
+    const [[createdUser]] = await q(
+      `SELECT id, username, email, fullName, firstName, lastName, role, isAdmin, eligibilityStatus, profilePhoto, emailVerifiedAt, activationToken
+         FROM Users
+        WHERE id=?`,
+      [userId]
+    );
+
+    const shouldSendActivation = EMAIL_VERIFICATION_ENABLED && !privileged && createdUser?.email;
+    if (shouldSendActivation) {
+      emailService.sendActivationEmail(createdUser, activationToken).catch((err) => {
+        console.error("auth/register sendActivationEmail", err);
+      });
+    } else if (createdUser?.email) {
+      emailService.sendWelcomeEmail(createdUser).catch((err) => {
+        console.error("auth/register welcomeEmail", err);
       });
     }
-    res.json({ success: true });
+
+    await recordAuditEvent({
+      actorId: null,
+      actorRole: "public",
+      action: "auth.register",
+      entityType: "user",
+      entityId: String(userId),
+      after: { username: createdUser?.username, email: createdUser?.email },
+      ip: req.ip || null,
+    });
+
+    const userForToken = { ...createdUser, role };
+    const token = sign(userForToken);
+    const isAdmin = privileged;
+    const emailVerified = Boolean(createdUser?.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED;
+    const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !privileged && !emailVerified;
+    const completionRequired = requiresProfileCompletion(userForToken);
+
+    res.json({
+      success: true,
+      token,
+      userId: createdUser.id,
+      username: createdUser.username,
+      fullName: createdUser.fullName || createdUser.username,
+      firstName: createdUser.firstName || null,
+      lastName: createdUser.lastName || null,
+      email: createdUser.email,
+      role,
+      isAdmin,
+      profilePhoto: createdUser.profilePhoto || null,
+      eligibilityStatus: createdUser.eligibilityStatus || null,
+      requiresProfileCompletion: completionRequired,
+      emailVerified,
+      requiresEmailVerification,
+      activationPending: requiresEmailVerification,
+    });
   } catch (e) {
     if (e?.code === "ER_DUP_ENTRY") {
       const sql = e?.sqlMessage || "";
@@ -274,6 +358,74 @@ router.post("/register", async (req, res) => {
     }
     console.error("auth/register:", e);
     res.status(500).json({ error: "SERVER", message: "Server error" });
+  }
+});
+
+router.post("/activation/resend", async (req, res) => {
+  try {
+    if (!EMAIL_VERIFICATION_ENABLED) {
+      return res.json({ success: true, disabled: true });
+    }
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: "MISSING_EMAIL", message: "Email address is required." });
+    }
+    const [[user]] = await q(`SELECT id, email, fullName, username, emailVerifiedAt FROM Users WHERE email=? LIMIT 1`, [email]);
+    if (!user) {
+      return res.json({ success: true });
+    }
+    if (user.emailVerifiedAt) {
+      return res.json({ success: true, already: true });
+    }
+    const { token } = await emailService.generateActivationToken(user.id);
+    await emailService.sendActivationEmail(user, token).catch((err) => console.error("auth/resend-activation", err));
+    res.json({ success: true });
+  } catch (err) {
+    console.error("auth/resend-activation", err);
+    res.status(500).json({ error: "SERVER", message: "Unable to resend activation email" });
+  }
+});
+
+router.post("/activate", async (req, res) => {
+  try {
+    if (!EMAIL_VERIFICATION_ENABLED) {
+      return res.json({ success: true, disabled: true });
+    }
+    const token = String(req.body?.token || "").trim();
+    if (!token) {
+      return res.status(400).json({ error: "MISSING_TOKEN", message: "Activation token is required." });
+    }
+    const [[user]] = await q(
+      `SELECT id, email, fullName, username, activationExpires, emailVerifiedAt
+         FROM Users
+        WHERE activationToken=?
+        LIMIT 1`,
+      [token]
+    );
+    if (!user) {
+      return res.status(404).json({ error: "TOKEN_INVALID", message: "Activation link is invalid or already used." });
+    }
+    if (user.emailVerifiedAt) {
+      await q(`UPDATE Users SET activationToken=NULL, activationExpires=NULL WHERE id=?`, [user.id]);
+      return res.json({ success: true, already: true });
+    }
+    if (user.activationExpires && new Date(user.activationExpires).getTime() < Date.now()) {
+      return res.status(410).json({ error: "TOKEN_EXPIRED", message: "Activation link has expired. Request a new one." });
+    }
+    await q(`UPDATE Users SET activationToken=NULL, activationExpires=NULL, emailVerifiedAt=UTC_TIMESTAMP(), eligibilityStatus='active' WHERE id=?`, [user.id]);
+    await recordAuditEvent({
+      actorId: user.id,
+      actorRole: "public",
+      action: "auth.activate",
+      entityType: "user",
+      entityId: String(user.id),
+      notes: "Email verified via activation link",
+    });
+    await emailService.sendWelcomeEmail(user).catch((err) => console.error("auth/activate welcome", err));
+    res.json({ success: true });
+  } catch (err) {
+    console.error("auth/activate", err);
+    res.status(500).json({ error: "SERVER", message: "Unable to activate account" });
   }
 });
 
@@ -300,7 +452,7 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Incorrect username or password." });
     }
 
-    const status = (u.eligibilityStatus || "").toLowerCase();
+    let status = (u.eligibilityStatus || "").toLowerCase();
     if (status === "disabled") {
       return res.status(423).json({
         error: "ACCOUNT_DISABLED",
@@ -313,14 +465,65 @@ router.post("/login", async (req, res) => {
     if (u.role !== role) {
       try {
         await q(`UPDATE Users SET role=? WHERE id=?`, [role, u.id]);
+        u.role = role;
       } catch {}
     }
-    if (status !== "active" && status !== "disabled") {
+
+    const privileged = role === "admin" || role === "super-admin";
+    let emailVerified = Boolean(u.emailVerifiedAt) || !u.activationToken;
+    if (!EMAIL_VERIFICATION_ENABLED && (!u.emailVerifiedAt || u.activationToken)) {
+      try {
+        await q(
+          `UPDATE Users
+              SET emailVerifiedAt = COALESCE(emailVerifiedAt, UTC_TIMESTAMP()),
+                  activationToken = NULL,
+                  activationExpires = NULL,
+                  eligibilityStatus = IF(eligibilityStatus='disabled', eligibilityStatus, 'active')
+            WHERE id=?`,
+          [u.id]
+        );
+        u.emailVerifiedAt = u.emailVerifiedAt || new Date();
+        u.activationToken = null;
+        if (status !== "disabled") {
+          status = "active";
+          u.eligibilityStatus = "active";
+        }
+      } catch (err) {
+        console.error("auth/login auto-verify disabled flag:", err);
+      }
+      emailVerified = true;
+    } else if (privileged && !emailVerified) {
+      try {
+        await q(
+          `UPDATE Users
+              SET emailVerifiedAt = COALESCE(emailVerifiedAt, UTC_TIMESTAMP()),
+                  activationToken = NULL,
+                  activationExpires = NULL,
+                  eligibilityStatus = IF(eligibilityStatus='disabled', eligibilityStatus, 'active')
+            WHERE id=?`,
+          [u.id]
+        );
+        emailVerified = true;
+        u.emailVerifiedAt = u.emailVerifiedAt || new Date();
+        if (status !== "disabled") {
+          status = "active";
+          u.eligibilityStatus = "active";
+        }
+      } catch (err) {
+        console.error("auth/login auto-verify admin:", err);
+      }
+    }
+
+    const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !privileged && !emailVerified;
+
+    if (status !== "active" && status !== "disabled" && !requiresEmailVerification) {
       try {
         await q(`UPDATE Users SET eligibilityStatus='active' WHERE id=?`, [u.id]);
+        status = "active";
         u.eligibilityStatus = "active";
       } catch {}
     }
+
     const userForToken = { ...u, role };
     const token = sign(userForToken);
     const isAdmin = role === "admin" || role === "super-admin";
@@ -341,11 +544,14 @@ router.post("/login", async (req, res) => {
       fullName: u.fullName || u.username,
       firstName: u.firstName || null,
       lastName: u.lastName || null,
+      email: u.email,
       role,
       isAdmin,
       profilePhoto: u.profilePhoto || null,
       eligibilityStatus: u.eligibilityStatus || null,
       requiresProfileCompletion: completionRequired,
+      emailVerified,
+      requiresEmailVerification,
     });
   } catch (err) {
     console.error("auth/login:", err);
@@ -401,8 +607,8 @@ router.post("/google", async (req, res) => {
         suffix += 1;
       }
       const [result] = await q(
-        `INSERT INTO Users (fullName, firstName, lastName, username, email, password, eligibilityStatus, hasVoted, isAdmin, role, profilePhoto, googleId)
-         VALUES (?,?,?,?,?, ?, 'pending',0,0,'user',?,?)`,
+        `INSERT INTO Users (fullName, firstName, lastName, username, email, password, eligibilityStatus, hasVoted, isAdmin, role, profilePhoto, googleId, activationToken, activationExpires, emailVerifiedAt)
+         VALUES (?,?,?,?,?, ?, 'active',0,0,'user',?, ?, NULL, NULL, UTC_TIMESTAMP())`,
         [
           fullName,
           derivedFirst || null,
@@ -438,6 +644,9 @@ router.post("/google", async (req, res) => {
       if (derivedLast && !user.lastName) {
         updates.push("lastName=?");
         params.push(derivedLast);
+      }
+      if (!user.emailVerifiedAt) {
+        updates.push("emailVerifiedAt=UTC_TIMESTAMP()");
       }
       const status = (user.eligibilityStatus || "").toLowerCase();
       if (status !== "active" && status !== "disabled") {
@@ -479,9 +688,9 @@ router.post("/google", async (req, res) => {
       user.eligibilityStatus = "active";
     }
     user.role = role;
+    const isAdmin = role === "admin" || role === "super-admin";
     user.isAdmin = isAdmin ? 1 : 0;
     const token = sign({ ...user, role });
-    const isAdmin = role === "admin" || role === "super-admin";
     await q(`UPDATE Users SET lastLoginAt=UTC_TIMESTAMP() WHERE id=?`, [user.id]);
     await recordAuditEvent({
       actorId: user.id,
@@ -499,11 +708,14 @@ router.post("/google", async (req, res) => {
       fullName: user.fullName || user.username,
       firstName: user.firstName || null,
       lastName: user.lastName || null,
+      email: user.email,
       role,
       isAdmin,
       profilePhoto: user.profilePhoto || null,
       eligibilityStatus: user.eligibilityStatus || null,
       requiresProfileCompletion: completionRequired,
+      emailVerified: Boolean(user.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED,
+      requiresEmailVerification: false,
     });
   } catch (err) {
     console.error("auth/google:", err);
@@ -558,8 +770,8 @@ router.post("/microsoft", async (req, res) => {
       const roleForInsert = azureRole || "user";
       const isAdminFlag = roleForInsert === "admin" || roleForInsert === "super-admin" ? 1 : 0;
       const [result] = await q(
-        `INSERT INTO Users (fullName, firstName, lastName, username, email, password, eligibilityStatus, hasVoted, isAdmin, role, profilePhoto, googleId, microsoftId)
-         VALUES (?,?,?,?,?, ?, 'pending',0,?, ?, ?, NULL, ?)`,
+        `INSERT INTO Users (fullName, firstName, lastName, username, email, password, eligibilityStatus, hasVoted, isAdmin, role, profilePhoto, googleId, microsoftId, activationToken, activationExpires, emailVerifiedAt)
+         VALUES (?,?,?,?,?, ?, 'active',0,?, ?, ?, NULL, ?, NULL, NULL, UTC_TIMESTAMP())`,
         [
           fullName,
           derivedFirst || null,
@@ -597,6 +809,9 @@ router.post("/microsoft", async (req, res) => {
       if (!user.email && email) {
         updates.push("email=?");
         params.push(email);
+      }
+      if (!user.emailVerifiedAt) {
+        updates.push("emailVerifiedAt=UTC_TIMESTAMP()");
       }
       const status = (user.eligibilityStatus || "").toLowerCase();
       if (status !== "active" && status !== "disabled") {
@@ -644,8 +859,10 @@ router.post("/microsoft", async (req, res) => {
       user.eligibilityStatus = "active";
     }
     const role = normalizeRole(user);
-    const token = sign({ ...user, role });
     const isAdmin = role === "admin" || role === "super-admin";
+    user.role = role;
+    user.isAdmin = isAdmin ? 1 : 0;
+    const token = sign({ ...user, role });
     await q(`UPDATE Users SET lastLoginAt=UTC_TIMESTAMP() WHERE id=?`, [user.id]);
     await recordAuditEvent({
       actorId: user.id,
@@ -663,11 +880,14 @@ router.post("/microsoft", async (req, res) => {
       fullName: user.fullName || user.username,
       firstName: user.firstName || null,
       lastName: user.lastName || null,
+      email: user.email,
       role,
       isAdmin,
       profilePhoto: user.profilePhoto || null,
       eligibilityStatus: user.eligibilityStatus || null,
       requiresProfileCompletion: completionRequired,
+      emailVerified: Boolean(user.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED,
+      requiresEmailVerification: false,
     });
   } catch (err) {
     if (err?.message === "MICROSOFT_NOT_CONFIGURED") {
@@ -697,10 +917,24 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
       u.role = role;
       u.isAdmin = role === "admin" || role === "super-admin" ? 1 : 0;
     }
+    const privileged = role === "admin" || role === "super-admin";
+    if ((privileged || !EMAIL_VERIFICATION_ENABLED) && !u.emailVerifiedAt) {
+      await q(
+        `UPDATE Users
+            SET emailVerifiedAt = COALESCE(emailVerifiedAt, UTC_TIMESTAMP()),
+                activationToken = NULL,
+                activationExpires = NULL
+          WHERE id=?`,
+        [u.id]
+      );
+      u.emailVerifiedAt = u.emailVerifiedAt || new Date();
+    }
     const normalizedUser = { ...u, role };
     const token = sign(normalizedUser);
     const isAdmin = role === "admin" || role === "super-admin";
     const completionRequired = requiresProfileCompletion(normalizedUser);
+    const emailVerified = Boolean(u.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED;
+    const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !isAdmin && !emailVerified && Boolean(u.activationToken);
     res.json({
       token,
       role,
@@ -708,12 +942,84 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
       userId: u.id,
       username: u.username,
       fullName: u.fullName || u.username,
+      email: u.email,
       profilePhoto: u.profilePhoto || null,
       requiresProfileCompletion: completionRequired,
+      emailVerified,
+      requiresEmailVerification,
     });
   } catch (err) {
     console.error("auth/refresh-role:", err);
     res.status(500).json({ error: "SERVER", message: "Could not refresh role" });
+  }
+});
+
+router.post("/request-password-reset", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: "MISSING_EMAIL", message: "Email address is required." });
+    }
+    const [[user]] = await q(`SELECT id, email, fullName, username FROM Users WHERE email=? LIMIT 1`, [email]);
+    if (!user) {
+      return res.json({ success: true });
+    }
+    await q(`DELETE FROM UserPasswordReset WHERE userId=?`, [user.id]);
+    const { token } = await emailService.createPasswordResetToken(user.id);
+    await emailService.sendPasswordResetEmail(user, token).catch((err) => console.error("auth/request-password-reset", err));
+    await recordAuditEvent({
+      actorId: user.id,
+      actorRole: "public",
+      action: "auth.password.reset.request",
+      entityType: "user",
+      entityId: String(user.id),
+      notes: "Password reset email requested",
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("auth/request-password-reset", err);
+    res.status(500).json({ error: "SERVER", message: "Unable to begin password reset" });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+    if (!token || !password) {
+      return res.status(400).json({ error: "MISSING_FIELDS", message: "Token and new password are required." });
+    }
+    const [[record]] = await q(
+      `SELECT upr.id, upr.userId, upr.expiresAt, upr.usedAt, u.email, u.fullName, u.username
+         FROM UserPasswordReset upr
+         INNER JOIN Users u ON u.id = upr.userId
+        WHERE upr.token=?
+        LIMIT 1`,
+      [token]
+    );
+    if (!record) {
+      return res.status(404).json({ error: "TOKEN_INVALID", message: "Reset link is invalid or already used." });
+    }
+    if (record.usedAt) {
+      return res.status(409).json({ error: "TOKEN_USED", message: "Reset link has already been used." });
+    }
+    if (record.expiresAt && new Date(record.expiresAt).getTime() < Date.now()) {
+      return res.status(410).json({ error: "TOKEN_EXPIRED", message: "Reset link has expired. Request a new one." });
+    }
+    const hash = await bcrypt.hash(String(password), 10);
+    await q(`UPDATE Users SET password=? WHERE id=?`, [hash, record.userId]);
+    await emailService.markPasswordResetUsed(token);
+    await recordAuditEvent({
+      actorId: record.userId,
+      actorRole: "public",
+      action: "auth.password.reset.complete",
+      entityType: "user",
+      entityId: String(record.userId),
+      notes: "Password reset via email link",
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("auth/reset-password", err);
+    res.status(500).json({ error: "SERVER", message: "Unable to reset password" });
   }
 });
 

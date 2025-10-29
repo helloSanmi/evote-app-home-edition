@@ -33,6 +33,11 @@ export default function App({ Component, pageProps }) {
         } else {
           localStorage.removeItem("fullName");
         }
+        if (data.email) {
+          localStorage.setItem("email", data.email);
+        } else {
+          localStorage.removeItem("email");
+        }
         if (data.profilePhoto) localStorage.setItem("profilePhoto", data.profilePhoto);
         if (typeof data.requiresProfileCompletion === "boolean") {
           if (data.requiresProfileCompletion) {
@@ -42,6 +47,16 @@ export default function App({ Component, pageProps }) {
           }
         } else if (data.role === "admin" || data.role === "super-admin") {
           localStorage.removeItem("needsProfileCompletion");
+        }
+        if (typeof data.emailVerified === "boolean") {
+          localStorage.setItem("emailVerified", data.emailVerified ? "true" : "false");
+        } else {
+          localStorage.removeItem("emailVerified");
+        }
+        if (data.requiresEmailVerification) {
+          localStorage.setItem("needsEmailVerification", "true");
+        } else {
+          localStorage.removeItem("needsEmailVerification");
         }
         window.dispatchEvent(new Event("storage"));
         reidentifySocket();

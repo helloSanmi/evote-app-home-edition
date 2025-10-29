@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { apiPost } from "../lib/apiBase";
-import { notifyError, notifySuccess } from "../components/Toast";
+import { notifyError, notifySuccess, notifyInfo } from "../components/Toast";
 import { reidentifySocket } from "../lib/socket";
 import LoadingCurtain from "../components/LoadingCurtain";
 import GoogleAuthButton from "../components/GoogleAuthButton";
@@ -45,7 +45,22 @@ export default function Login() {
     } else {
       localStorage.removeItem("needsProfileCompletion");
     }
-    localStorage.setItem("profilePhoto", data.profilePhoto || "/avatar.png");
+    if (data.email) {
+      localStorage.setItem("email", data.email);
+    } else {
+      localStorage.removeItem("email");
+    }
+    if (typeof data.emailVerified === "boolean") {
+      localStorage.setItem("emailVerified", data.emailVerified ? "true" : "false");
+    } else {
+      localStorage.removeItem("emailVerified");
+    }
+    if (data.requiresEmailVerification) {
+      localStorage.setItem("needsEmailVerification", "true");
+    } else {
+      localStorage.removeItem("needsEmailVerification");
+    }
+    localStorage.setItem("profilePhoto", data.profilePhoto || "/placeholder.png");
     localStorage.setItem("role", (data.role || "user").toLowerCase());
     localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
     window.dispatchEvent(new Event("storage"));
@@ -54,6 +69,9 @@ export default function Login() {
   const finishLogin = async (data, message = "Signed in successfully") => {
     persistAuth(data);
     notifySuccess(message);
+    if (data.requiresEmailVerification) {
+      notifyInfo("Check your email to verify your account and unlock every feature.");
+    }
     reidentifySocket();
     let destination = "/";
     if (data.requiresProfileCompletion) {

@@ -240,7 +240,7 @@ export default function HowItWorks() {
                 </div>
               </section>
 
-          <section className="rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-[0_50px_140px_-80px_rgba(79,70,229,0.45)] sm:px-10">
+          <section className="rounded-3xl border border-slate-200 bg-white px-5 py-8 text-center shadow-[0_50px_140px_-80px_rgba(79,70,229,0.45)] sm:px-10 sm:py-10">
             <h2 className="text-2xl font-bold text-slate-900 sm:text-3xl">Ready to modernize your election?</h2>
             <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-600 sm:text-base">
               Spin up a test election in minutes, invite your team, and experience the end-to-end journey before launch day.

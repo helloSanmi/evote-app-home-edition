@@ -307,6 +307,90 @@ async function ensureNotificationTables() {
   `);
 }
 
+async function ensureUserVerificationColumns() {
+  const columns = [
+    { name: "activationToken", sql: "ALTER TABLE Users ADD COLUMN activationToken VARCHAR(128) NULL AFTER restoreToken" },
+    { name: "activationExpires", sql: "ALTER TABLE Users ADD COLUMN activationExpires DATETIME NULL AFTER activationToken" },
+    { name: "emailVerifiedAt", sql: "ALTER TABLE Users ADD COLUMN emailVerifiedAt DATETIME NULL AFTER activationExpires" },
+  ];
+
+  for (const column of columns) {
+    const [[exists]] = await q(
+      `SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME='Users'
+          AND COLUMN_NAME=?`,
+      [column.name]
+    );
+    if (!exists) {
+      await q(column.sql);
+    }
+  }
+
+  await q(`UPDATE Users
+             SET emailVerifiedAt = COALESCE(emailVerifiedAt, createdAt, UTC_TIMESTAMP())
+           WHERE emailVerifiedAt IS NULL
+             AND (activationToken IS NULL OR activationToken='')
+             AND (eligibilityStatus IS NULL OR eligibilityStatus IN ('active','disabled'))`);
+}
+
+async function ensurePasswordResetTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS UserPasswordReset (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      token VARCHAR(128) NOT NULL UNIQUE,
+      expiresAt DATETIME NOT NULL,
+      usedAt DATETIME NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_passwordreset_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE CASCADE,
+      KEY idx_passwordreset_user (userId, expiresAt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+async function ensureVotingPeriodNotificationColumns() {
+  const columns = [
+    { name: "notifyScheduledAt", sql: "ALTER TABLE VotingPeriod ADD COLUMN notifyScheduledAt DATETIME NULL AFTER forcedEnded" },
+    { name: "notifyStartedAt", sql: "ALTER TABLE VotingPeriod ADD COLUMN notifyStartedAt DATETIME NULL AFTER notifyScheduledAt" },
+    { name: "notifyEndedAt", sql: "ALTER TABLE VotingPeriod ADD COLUMN notifyEndedAt DATETIME NULL AFTER notifyStartedAt" },
+    { name: "notifyResultsAt", sql: "ALTER TABLE VotingPeriod ADD COLUMN notifyResultsAt DATETIME NULL AFTER notifyEndedAt" },
+  ];
+
+  for (const column of columns) {
+    const [[exists]] = await q(
+      `SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME='VotingPeriod'
+          AND COLUMN_NAME=?`,
+      [column.name]
+    );
+    if (!exists) {
+      await q(column.sql);
+    }
+  }
+}
+
+async function ensureCookieConsentTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS CookieConsent (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NULL,
+      visitorId VARCHAR(64) NULL,
+      analytics TINYINT(1) NOT NULL DEFAULT 0,
+      marketing TINYINT(1) NOT NULL DEFAULT 0,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_cookieconsent_user (userId),
+      UNIQUE KEY uq_cookieconsent_visitor (visitorId),
+      KEY idx_cookieconsent_updated (updatedAt),
+      CONSTRAINT fk_cookieconsent_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
 async function alignRolesWithFlags() {
   const adminUsernames = envSet(process.env.ADMIN_USERNAMES);
   const adminEmails = envSet(process.env.ADMIN_EMAILS);
@@ -350,11 +434,15 @@ async function ensureSchema() {
   await ensureMicrosoftIdColumn();
   await ensureIdentityColumns();
   await ensureUserLifecycleColumns();
+  await ensureUserVerificationColumns();
   await ensureChatTables();
   await alignRolesWithFlags();
   await ensureRequestLogColumns();
   await ensureAuditLogTable();
   await ensureNotificationTables();
+  await ensurePasswordResetTable();
+  await ensureVotingPeriodNotificationColumns();
+  await ensureCookieConsentTable();
 }
 
 module.exports = { ensureSchema };

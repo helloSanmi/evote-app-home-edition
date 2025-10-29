@@ -215,7 +215,7 @@ export default function Results() {
   if (sessions === null) {
     return (
       <div className="mx-auto flex min-h-[40vh] w-full max-w-4xl items-center justify-center px-4">
-        <div className="rounded-3xl border border-slate-200 bg-white px-10 py-12 text-center shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur">
+        <div className="rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur sm:px-10 sm:py-12">
           <div className="animate-pulse text-sm text-slate-500">Loading published sessions…</div>
         </div>
       </div>
@@ -225,7 +225,7 @@ export default function Results() {
   if (!sortedSessions.length) {
     return (
       <div className="mx-auto flex min-h-[40vh] w-full max-w-4xl items-center justify-center px-4">
-        <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-10 py-12 text-center text-slate-600 shadow-sm">
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center text-slate-600 shadow-sm sm:px-10 sm:py-12">
           <h2 className="text-2xl font-semibold text-slate-900">No results published yet</h2>
           <p className="mt-2 text-sm text-slate-500">As soon as administrators publish a session, its breakdown will appear here.</p>
         </div>

@@ -9,7 +9,7 @@ export default function ConfirmDialog({ open, title = "Confirm action", message,
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onCancel} />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/40 bg-white/95 p-6 shadow-xl">
+      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/40 bg-white/95 p-5 shadow-xl sm:p-6">
         <div className="space-y-3 text-center">
           <h3 className="text-xl font-semibold text-slate-900">{title}</h3>
           {message && <p className="text-sm text-slate-600">{message}</p>}

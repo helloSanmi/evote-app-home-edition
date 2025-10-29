@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const bcrypt = require("bcryptjs");
+const crypto = require("node:crypto");
 const { q } = require("../db");
 const { requireAuth, requireAdmin, requireRole } = require("../middleware/auth");
 const { recordAuditEvent } = require("../utils/audit");
@@ -9,6 +10,10 @@ const { hardDeleteUser } = require("../utils/retention");
 const { buildMetricsSnapshot } = require("../utils/telemetry");
 const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
 const { notify } = require("../utils/notifications");
+const emailService = require("../services/emailService");
+
+const AUTH_STATUS = (process.env.AUTH_STATUS || "on").trim().toLowerCase();
+const EMAIL_VERIFICATION_ENABLED = AUTH_STATUS !== "off";
 
 const actorLabel = (user) => {
   if (!user) return "An admin";
@@ -223,6 +228,13 @@ router.post("/voting-period", requireAuth, requireAdmin, async (req, res) => {
         scopeLGA: scopeLGA || null,
       },
     });
+    const [[periodRow]] = await q(`SELECT * FROM VotingPeriod WHERE id=?`, [insertId]);
+    if (periodRow) {
+      emailService.sendSessionLifecycleEmail("scheduled", periodRow).catch((err) => {
+        console.error("admin/session scheduled email", err);
+      });
+      await q(`UPDATE VotingPeriod SET notifyScheduledAt=UTC_TIMESTAMP() WHERE id=?`, [insertId]);
+    }
     await notifyAdminAction(io, req, {
       type: "admin.session.created",
       title: "Session scheduled",
@@ -386,6 +398,11 @@ router.post("/end-voting-early", requireAuth, requireAdmin, async (req, res) => 
         forced: true,
       },
     });
+    period.forcedEnded = 1;
+    emailService.sendSessionLifecycleEmail("ended", period).catch((err) => {
+      console.error("admin/end-early email", err);
+    });
+    await q(`UPDATE VotingPeriod SET notifyEndedAt=UTC_TIMESTAMP() WHERE id=?`, [period.id]);
     await notifyAdminAction(io, req, {
       type: "admin.session.ended",
       title: "Session ended early",
@@ -454,6 +471,10 @@ router.post("/publish-results", requireAuth, requireAdmin, async (req, res) => {
         endTime: new Date(period.endTime).toISOString(),
       },
     });
+    emailService.sendSessionLifecycleEmail("results", period).catch((err) => {
+      console.error("admin/results email", err);
+    });
+    await q(`UPDATE VotingPeriod SET notifyResultsAt=UTC_TIMESTAMP() WHERE id=?`, [period.id]);
     await notifyAdminAction(io, req, {
       type: "admin.results.published",
       title: "Results published",
@@ -724,6 +745,11 @@ router.post("/periods/cancel", requireAuth, requireRole(["super-admin"]), async 
         startTime: new Date(period.startTime).toISOString(),
       },
     });
+    emailService
+      .sendSessionLifecycleEmail("cancelled", { ...period, status: "cancelled" })
+      .catch((err) => {
+        console.error("admin/cancel email", err);
+      });
     res.json({ success: true, periodId: pid });
   } catch (e) {
     console.error("admin/periods/cancel:", e);
@@ -909,9 +935,15 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
     const primaryName = nameParts.shift() || "";
     const secondaryName = nameParts.length ? nameParts.join(" ") : primaryName;
     const hash = await bcrypt.hash(password.trim(), 10);
+    const isAdminRole = normalizedRole === "admin";
+    const verificationRequired = EMAIL_VERIFICATION_ENABLED && !isAdminRole;
+    const activationToken = verificationRequired ? crypto.randomUUID() : null;
+    const activationExpires = verificationRequired ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null;
+    const emailVerifiedAt = verificationRequired ? null : new Date();
+    const eligibilityStatus = verificationRequired ? "pending" : "active";
     const [result] = await q(
-      `INSERT INTO Users (fullName, firstName, lastName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted, role, isAdmin)
-       VALUES (?,?,?,?,?,?,?,?,?,NULL,'active',0,?,?)`,
+      `INSERT INTO Users (fullName, firstName, lastName, username, email, password, state, residenceLGA, phone, nationality, dateOfBirth, eligibilityStatus, hasVoted, role, isAdmin, activationToken, activationExpires, emailVerifiedAt)
+       VALUES (?,?,?,?,?,?,?,?,?,NULL,?,0,?, ?, ?, ?, ?)`,
       [
         fullName,
         primaryName || null,
@@ -923,8 +955,12 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
         residenceLGA || null,
         phone || null,
         nationality || null,
+        eligibilityStatus,
         normalizedRole,
-        normalizedRole === "admin" ? 1 : 0,
+        isAdminRole ? 1 : 0,
+        activationToken,
+        activationExpires,
+        emailVerifiedAt,
       ]
     );
     const insertId = result?.insertId;
@@ -933,6 +969,11 @@ router.post("/users", requireAuth, requireRole(["super-admin"]), async (req, res
         `SELECT id, fullName, username, email, role FROM Users WHERE id=?`,
         [insertId]
       );
+      if (verificationRequired && created?.email) {
+        emailService.sendActivationEmail(created, activationToken).catch((err) => console.error("admin/users sendActivationEmail", err));
+      } else if (created?.email) {
+        emailService.sendWelcomeEmail(created).catch((err) => console.error("admin/users sendWelcomeEmail", err));
+      }
       await recordAuditEvent({
         actorId: req.user?.id || null,
         actorRole: (req.user?.role || "").toLowerCase() || null,

@@ -4,6 +4,7 @@ import Navbar from "./Navbar";
 import CookieBanner from "./CookieBanner";
 import InactivityGuard from "./InactivityGuard";
 import dynamic from "next/dynamic";
+import EmailVerificationGate from "./EmailVerificationGate";
 
 const AssistantChat = dynamic(() => import("./AssistantChat"), { ssr: false });
 
@@ -43,6 +44,7 @@ export default function Layout({ children, disableFooter = false, fullWidth = fa
       <CookieBanner />
       <AssistantChat />
       <InactivityGuard />
+      <EmailVerificationGate />
     </div>
   );
 }

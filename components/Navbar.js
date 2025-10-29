@@ -13,14 +13,14 @@ export default function Navbar() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [avatar, setAvatar] = useState("/avatar.png");
+  const [avatar, setAvatar] = useState("/placeholder.png");
   const profileRef = useRef(null);
   const mobileRef = useRef(null);
 
   const resolveAvatar = (raw) => {
     const value = (raw || "").trim();
-    if (!value) return "/avatar.png";
-    if (value === "/avatar.png") return value;
+    if (!value) return "/placeholder.png";
+    if (value === "/placeholder.png") return value;
     if (/^https?:/i.test(value)) return value;
     if (value.startsWith("/uploads")) return absUrl(value);
     if (value.startsWith("uploads/")) return absUrl(`/${value}`);
@@ -63,6 +63,9 @@ export default function Navbar() {
       localStorage.removeItem("isAdmin");
       localStorage.removeItem("state");
       localStorage.removeItem("residenceLGA");
+      localStorage.removeItem("email");
+      localStorage.removeItem("emailVerified");
+      localStorage.removeItem("needsEmailVerification");
       localStorage.removeItem("chatGuestName");
       localStorage.removeItem("chatGuestToken");
       window.dispatchEvent(new Event("storage"));
@@ -164,7 +167,7 @@ export default function Navbar() {
                     className="h-full w-full object-cover"
                     onError={(e) => {
                       e.currentTarget.onerror = null;
-                      e.currentTarget.src = "/avatar.png";
+                      e.currentTarget.src = "/placeholder.png";
                     }}
                   />
                 </button>
@@ -212,7 +215,7 @@ export default function Navbar() {
                 className="h-8 w-8 rounded-full object-cover"
                 onError={(e) => {
                   e.currentTarget.onerror = null;
-                  e.currentTarget.src = "/avatar.png";
+                  e.currentTarget.src = "/placeholder.png";
                 }}
               />
             </button>

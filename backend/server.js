@@ -51,6 +51,7 @@ app.use("/api/admin", require("./routes/admin"));
 app.use("/api/profile", require("./routes/profile"));  // profile endpoints
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/notifications", require("./routes/notifications"));
+app.use("/api/privacy", require("./routes/privacy"));
 
 // Socket.IO
 const server = http.createServer(app);
@@ -84,12 +85,14 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 5050);
 const { ensureSchema } = require("./dbMigrations");
 const { startDataGovernanceScheduler } = require("./utils/retention");
+const { startNotificationScheduler } = require("./utils/sessionEmailScheduler");
 
 async function start() {
   try {
     await ensureSchema();
     server.listen(PORT, HOST, () => console.log(`Server running on http://${HOST}:${PORT}`));
     startDataGovernanceScheduler();
+    startNotificationScheduler();
   } catch (err) {
     console.error("Failed to prepare database schema:", err);
     process.exit(1);

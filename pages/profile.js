@@ -114,7 +114,7 @@ export default function Profile() {
       setUser(me);
       if (typeof window !== "undefined") {
         localStorage.setItem("fullName", me.fullName || me.username || "");
-        localStorage.setItem("profilePhoto", me.profilePhoto || "/avatar.png");
+        localStorage.setItem("profilePhoto", me.profilePhoto || "/placeholder.png");
         localStorage.setItem("state", me.state || "");
         localStorage.setItem("residenceLGA", me.residenceLGA || "");
         window.dispatchEvent(new Event("storage"));
@@ -164,7 +164,7 @@ export default function Profile() {
       if (!r.ok || !j?.url) throw new Error(j?.message || "Upload failed");
       notifySuccess("Photo updated");
       if (typeof window !== "undefined") {
-        localStorage.setItem("profilePhoto", j.url || "/avatar.png");
+        localStorage.setItem("profilePhoto", j.url || "/placeholder.png");
         window.dispatchEvent(new Event("storage"));
       }
       setUser(u => ({ ...u, profilePhoto: j.url }));
@@ -177,7 +177,7 @@ export default function Profile() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
-      <div className="bg-white rounded-2xl shadow p-6 flex items-center gap-5">
+      <div className="bg-white rounded-2xl shadow p-6 flex flex-col gap-5 sm:flex-row sm:items-center">
         <label className="relative cursor-pointer group">
           <img
             src={mediaUrl(user.profilePhoto)}
@@ -188,19 +188,19 @@ export default function Profile() {
           <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={onPickAvatar} />
           <span className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-full transition" />
         </label>
-        <div>
+        <div className="text-center sm:text-left">
           <div className="text-2xl font-bold">{user.fullName}</div>
           <div className="text-gray-600">{user.username} • {user.email}</div>
           <div className="text-gray-500 text-sm">Joined {new Date(user.createdAt).toLocaleDateString()}</div>
         </div>
-        <div className="ml-auto">
+        <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row">
           {!editing ? (
-            <button onClick={() => setEditing(true)} className="btn-secondary">Edit</button>
+            <button onClick={() => setEditing(true)} className="btn-secondary w-full sm:w-auto">Edit</button>
           ) : (
-            <div className="flex gap-2">
-              <button disabled={busy} onClick={save} className="btn-primary disabled:opacity-60">Save</button>
-              <button disabled={busy} onClick={() => { setEditing(false); }} className="btn-secondary">Cancel</button>
-            </div>
+            <>
+              <button disabled={busy} onClick={save} className="btn-primary w-full disabled:opacity-60 sm:w-auto">Save</button>
+              <button disabled={busy} onClick={() => { setEditing(false); }} className="btn-secondary w-full sm:w-auto">Cancel</button>
+            </>
           )}
         </div>
       </div>
@@ -325,7 +325,7 @@ export default function Profile() {
               />
             </div>
             <p className="text-xs text-slate-500">After confirmation the account enters a 30 day pending state. You can restore it using your username, date of birth, and password.</p>
-            <button type="submit" disabled={deleteBusy} className="btn-primary disabled:opacity-60">
+            <button type="submit" disabled={deleteBusy} className="btn-primary w-full disabled:opacity-60 sm:w-auto">
               {deleteBusy ? "Scheduling…" : "Schedule deletion"}
             </button>
           </form>

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mediaUrl } from '../lib/mediaUrl.js';
 
 test('mediaUrl falls back to default avatar when empty', () => {
-  assert.equal(mediaUrl(null), '/avatar.png');
-  assert.equal(mediaUrl(''), '/avatar.png');
+  assert.equal(mediaUrl(null), '/placeholder.png');
+  assert.equal(mediaUrl(''), '/placeholder.png');
 });
 
 test('mediaUrl returns absolute url untouched', () => {

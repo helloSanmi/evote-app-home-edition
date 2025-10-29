@@ -1,5 +1,5 @@
 // frontend/pages/admin.js
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import {
   apiGet,
@@ -89,6 +89,12 @@ export default function AdminPage() {
   const [analytics, setAnalytics] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState(null);
+  const [consentSummary, setConsentSummary] = useState(null);
+  const [consentBreakdown, setConsentBreakdown] = useState(null);
+  const [consentRecords, setConsentRecords] = useState([]);
+  const [consentLoading, setConsentLoading] = useState(false);
+  const [consentError, setConsentError] = useState(null);
+  const [exportingConsent, setExportingConsent] = useState(false);
   const defaultEditSessionForm = () => ({
     title: "",
     description: "",
@@ -144,6 +150,7 @@ export default function AdminPage() {
     { id: "archive", label: "Archive" },
     { id: "analytics", label: "Analytics" },
     { id: "users", label: "Users" },
+    { id: "privacy", label: "Privacy & Consent" },
     { id: "logs", label: "Request Logs" },
   ], []);
   const visibleTabs = useMemo(() => (
@@ -566,6 +573,12 @@ export default function AdminPage() {
   const activeSessions = useMemo(() => sessions.filter(isActive), [sessions, currentTime]);
   const awaitingSessions = useMemo(() => sessions.filter(awaitingPublish), [sessions, currentTime]);
   const upcomingSessions = useMemo(() => sessions.filter(isUpcoming), [sessions, currentTime]);
+  const formatDateTime = useCallback((value) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString();
+  }, []);
 
   useEffect(() => {
     statsRef.current = stats;
@@ -950,6 +963,68 @@ export default function AdminPage() {
     }
   };
 
+  const loadConsentDashboard = useCallback(
+    async ({ suppressErrors = false } = {}) => {
+      setConsentLoading(true);
+      if (!suppressErrors) setConsentError(null);
+      try {
+        const data = await apiGet("/api/privacy/consent/dashboard");
+        setConsentSummary(data?.summary || null);
+        setConsentBreakdown(data?.breakdown || null);
+        setConsentRecords(Array.isArray(data?.records) ? data.records : []);
+        setConsentError(null);
+      } catch (err) {
+        const message = err.message || "Failed to load consent metrics";
+        setConsentSummary(null);
+        setConsentBreakdown(null);
+        setConsentRecords([]);
+        setConsentError(message);
+        if (!suppressErrors) notifyError(message);
+      } finally {
+        setConsentLoading(false);
+      }
+    },
+    []
+  );
+
+  const exportConsentCsv = useCallback(async () => {
+    if (typeof window === "undefined") return;
+    setExportingConsent(true);
+    try {
+      const tokenValue = localStorage.getItem("token");
+      const res = await fetch(absUrl("/api/privacy/consent/export"), {
+        method: "GET",
+        headers: tokenValue ? { Authorization: `Bearer ${tokenValue}` } : {},
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || "Failed to export consent records");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "cookie-consent.csv";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      notifySuccess("Consent records exported");
+    } catch (err) {
+      notifyError(err.message || "Failed to export consent records");
+    } finally {
+      setExportingConsent(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "privacy") return;
+    if (consentLoading) return;
+    if (consentSummary) return;
+    loadConsentDashboard({ suppressErrors: true });
+  }, [tab, consentLoading, consentSummary, loadConsentDashboard]);
+
   async function disableUser(user) {
     try {
       await apiPost(`/api/admin/users/${user.id}/disable`, {});
@@ -1311,7 +1386,7 @@ export default function AdminPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6">
-      <header className="rounded-[2.5rem] border border-slate-200 bg-white px-6 py-10 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur md:px-10">
+      <header className="rounded-[2.5rem] border border-slate-200 bg-white px-4 py-8 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur sm:px-6 sm:py-10 md:px-10">
         <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Admin console</p>
@@ -1320,7 +1395,7 @@ export default function AdminPage() {
               Create sessions, manage candidates, oversee live participation, and publish results in one streamlined workspace.
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-center text-sm">
+          <div className="grid grid-cols-1 gap-3 text-center text-sm sm:grid-cols-3">
             <StatPill label="Active" value={stats.active} tone="emerald" />
             <StatPill label="Upcoming" value={stats.upcoming} tone="sky" />
             <StatPill label="Awaiting publish" value={stats.awaiting} tone="amber" />
@@ -1328,13 +1403,13 @@ export default function AdminPage() {
         </div>
       </header>
 
-      <nav className="sticky top-20 z-30 mb-6 flex flex-wrap gap-2 overflow-x-auto rounded-full border border-slate-200 bg-white/90 px-3 py-2 shadow-sm backdrop-blur-md">
+      <nav className="sticky top-16 z-30 mb-6 flex gap-2 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white/90 px-3 py-2 shadow-sm backdrop-blur-md sm:top-20 sm:flex-wrap sm:whitespace-normal">
         {visibleTabs.map((item) => (
           <button
             key={item.id}
             type="button"
             onClick={() => setTab(item.id)}
-            className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+            className={`flex-shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition sm:px-4 sm:py-2 sm:text-sm ${
               tab === item.id
                 ? "border-indigo-200 bg-indigo-50 text-indigo-700 shadow"
                 : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
@@ -1517,7 +1592,7 @@ export default function AdminPage() {
                     <input id="session-age" type="number" min={18} className="form-control" value={minAge} onChange={(e) => setMinAge(e.target.value)} />
                   </div>
                   <div className="flex justify-end">
-                    <button type="button" className="btn-primary" onClick={goToNextSessionStep}>
+                    <button type="button" className="btn-primary w-full sm:w-auto" onClick={goToNextSessionStep}>
                       Continue
                     </button>
                   </div>
@@ -1546,11 +1621,11 @@ export default function AdminPage() {
                       />
                     </div>
                   </div>
-                  <div className="flex justify-between">
-                    <button type="button" className="btn-secondary" onClick={goToPreviousSessionStep}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+                    <button type="button" className="btn-secondary w-full sm:w-auto" onClick={goToPreviousSessionStep}>
                       Back
                     </button>
-                    <button type="button" className="btn-primary" onClick={goToNextSessionStep}>
+                    <button type="button" className="btn-primary w-full sm:w-auto" onClick={goToNextSessionStep}>
                       Continue
                     </button>
                   </div>
@@ -1718,7 +1793,7 @@ export default function AdminPage() {
                           </div>
                         </div>
                         <div className="flex flex-wrap justify-end gap-2">
-                          <button type="submit" className="btn-primary" disabled={candidateSaving}>
+                          <button type="submit" className="btn-primary w-full sm:w-auto" disabled={candidateSaving}>
                             {candidateSaving
                               ? editingCandidate
                                 ? "Saving…"
@@ -1730,7 +1805,7 @@ export default function AdminPage() {
                           {editingCandidate && (
                             <button
                               type="button"
-                              className="btn-secondary"
+                              className="btn-secondary w-full sm:w-auto"
                               onClick={cancelCandidateEdit}
                               disabled={candidateSaving}
                             >
@@ -1853,13 +1928,13 @@ export default function AdminPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button type="button" className="btn-secondary" onClick={goToPreviousSessionStep}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-2">
+                    <button type="button" className="btn-secondary w-full sm:w-auto" onClick={goToPreviousSessionStep}>
                       Back
                     </button>
                     <button
                       type="button"
-                      className="btn-primary"
+                      className="btn-primary w-full sm:w-auto"
                       onClick={handleLaunchSession}
                       disabled={!hasEligibleCandidates}
                     >
@@ -1875,7 +1950,7 @@ export default function AdminPage() {
             title="Upcoming & awaiting"
             description="Monitor sessions launching soon or ready for final actions."
             action={
-              <button type="button" onClick={loadSessions} className="btn-secondary px-3 py-1 text-xs">
+              <button type="button" onClick={loadSessions} className="btn-secondary w-full px-3 py-1 text-xs sm:w-auto">
                 Refresh
               </button>
             }
@@ -1987,28 +2062,28 @@ export default function AdminPage() {
                             </div>
                           </div>
                         </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
+                        <div className="mt-4 flex flex-col gap-2 sm:flex-wrap sm:flex-row">
                           {isUpcoming(period) && viewerRole === "super-admin" && (
-                            <button type="button" className="btn-secondary" onClick={() => openReschedule(period)}>
+                            <button type="button" className="btn-secondary w-full sm:w-auto" onClick={() => openReschedule(period)}>
                               Reschedule
                             </button>
                           )}
                           {isUpcoming(period) && viewerRole === "super-admin" && (
-                            <button type="button" className="btn-secondary" onClick={() => openEditSession(period)}>
+                            <button type="button" className="btn-secondary w-full sm:w-auto" onClick={() => openEditSession(period)}>
                               Edit details
                             </button>
                           )}
                           {isUpcoming(period) && viewerRole === "super-admin" && (
                             <button
                               type="button"
-                              className="btn-secondary text-rose-600 hover:text-rose-700"
+                              className="btn-secondary w-full text-rose-600 hover:text-rose-700 sm:w-auto"
                               onClick={() => setPendingAction({ type: "cancel", period })}
                             >
                               Cancel session
                             </button>
                           )}
                           {awaitingPublish(period) && (
-                            <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period })}>
+                            <button type="button" className="btn-primary w-full sm:w-auto" onClick={() => setPendingAction({ type: "publish", period })}>
                               Publish results
                             </button>
                           )}
@@ -2032,14 +2107,14 @@ export default function AdminPage() {
       )}
 
       {tab === "archive" && (
-      <section className="grid gap-6 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:grid-cols-2 md:p-8">
+      <section className="grid gap-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 md:grid-cols-2 md:p-8">
         <div>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Previous sessions</h2>
               <p className="text-sm text-slate-500">Review ended elections and audit their results.</p>
             </div>
-            <button type="button" onClick={loadSessions} className="btn-secondary px-3 py-2 text-xs">
+            <button type="button" onClick={loadSessions} className="btn-secondary w-full px-3 py-2 text-xs sm:w-auto">
               Reload
             </button>
           </div>
@@ -2162,13 +2237,13 @@ export default function AdminPage() {
                 )}
               </div>
 
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 {!selPast.resultsPublished && (
-                  <button type="button" className="btn-primary" onClick={() => setPendingAction({ type: "publish", period: selPast })}>
+                  <button type="button" className="btn-primary w-full sm:w-auto" onClick={() => setPendingAction({ type: "publish", period: selPast })}>
                     Publish results
                   </button>
                 )}
-                <button type="button" className="btn-secondary" onClick={() => setPendingAction({ type: "delete", period: selPast })}>
+                <button type="button" className="btn-secondary w-full sm:w-auto" onClick={() => setPendingAction({ type: "delete", period: selPast })}>
                   Delete session
                 </button>
               </div>
@@ -2188,6 +2263,167 @@ export default function AdminPage() {
         />
       )}
 
+      {tab === "privacy" && (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">Cookie & consent preferences</h2>
+              <p className="text-sm text-slate-500">
+                Track how voters opt into analytics and marketing cookies across the platform.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => loadConsentDashboard({ suppressErrors: false })}
+                className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto"
+                disabled={consentLoading}
+              >
+                {consentLoading ? "Refreshing..." : "Refresh"}
+              </button>
+              <button
+                type="button"
+                onClick={exportConsentCsv}
+                className="btn-primary w-full px-4 py-2 text-xs sm:w-auto"
+                disabled={exportingConsent}
+              >
+                {exportingConsent ? "Preparing…" : "Download CSV"}
+              </button>
+            </div>
+          </div>
+
+          {consentError && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+              {consentError}
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total responses</p>
+              <p className="mt-2 text-3xl font-bold text-slate-900">
+                {consentSummary ? consentSummary.total : consentLoading ? "…" : "0"}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                {consentSummary?.lastUpdated ? `Updated ${formatDateTime(consentSummary.lastUpdated)}` : "Awaiting data"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500">Analytics enabled</p>
+              <p className="mt-2 text-3xl font-bold text-indigo-600">
+                {consentSummary ? consentSummary.analyticsOn : consentLoading ? "…" : "0"}
+              </p>
+              <p className="mt-1 text-xs text-indigo-400">
+                {consentSummary && consentSummary.total
+                  ? `${Math.round((consentSummary.analyticsOn / consentSummary.total) * 100)}% opt-in`
+                  : "—"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-amber-100 bg-white p-5 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-500">Marketing enabled</p>
+              <p className="mt-2 text-3xl font-bold text-amber-600">
+                {consentSummary ? consentSummary.marketingOn : consentLoading ? "…" : "0"}
+              </p>
+              <p className="mt-1 text-xs text-amber-400">
+                {consentSummary && consentSummary.total
+                  ? `${Math.round((consentSummary.marketingOn / consentSummary.total) * 100)}% opt-in`
+                  : "—"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-500">Unique accounts</p>
+              <p className="mt-2 text-3xl font-bold text-emerald-600">
+                {consentBreakdown ? consentBreakdown.uniqueUsers : consentLoading ? "…" : "0"}
+              </p>
+              <p className="mt-1 text-xs text-emerald-400">
+                Guests: {consentBreakdown ? consentBreakdown.anonymous : consentLoading ? "…" : "0"}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">Recent consent updates</h3>
+              <span className="text-xs text-slate-500">
+                {consentSummary?.lastUpdated
+                  ? `Last change ${formatDateTime(consentSummary.lastUpdated)}`
+                  : "No consent records yet"}
+              </span>
+            </div>
+            {consentLoading ? (
+              <div className="px-5 py-6 text-sm text-slate-500">Loading consent data…</div>
+            ) : consentRecords.length === 0 ? (
+              <div className="px-5 py-6 text-sm text-slate-500">No consent preferences captured yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-100 text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-5 py-3 text-left font-semibold">Person</th>
+                      <th className="px-5 py-3 text-left font-semibold">Analytics</th>
+                      <th className="px-5 py-3 text-left font-semibold">Marketing</th>
+                      <th className="px-5 py-3 text-left font-semibold">Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {consentRecords.map((record) => {
+                      const isUser = Boolean(record.userId);
+                      const visitorLabel = record.visitorId ? record.visitorId.slice(0, 8).toUpperCase() : "N/A";
+                      return (
+                        <tr key={record.id}>
+                          <td className="whitespace-nowrap px-5 py-3">
+                            {isUser ? (
+                              <div>
+                                <div className="font-semibold text-slate-900">
+                                  {record.fullName || record.username || record.email || `User #${record.userId}`}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {[record.email, record.username].filter(Boolean).join(" • ")}
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <div className="font-semibold text-slate-900">Guest visitor</div>
+                                <div className="text-xs text-slate-500">ID {visitorLabel}</div>
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-5 py-3">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                record.analytics
+                                  ? "bg-emerald-50 text-emerald-600"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
+                              {record.analytics ? "Enabled" : "Declined"}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                record.marketing
+                                  ? "bg-indigo-50 text-indigo-600"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
+                              {record.marketing ? "Enabled" : "Declined"}
+                            </span>
+                          </td>
+                          <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500">
+                            {formatDateTime(record.updatedAt)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
 
       {tab === "users" && (
         <div className="space-y-5">
@@ -2196,10 +2432,10 @@ export default function AdminPage() {
             description={`Review sign-ups, manage eligibility, or remove accounts. Signed in as ${viewerRole === "super-admin" ? "Super Admin" : viewerRole === "admin" ? "Admin" : "User"}.`}
             action={
               <div className="flex gap-2">
-                <button type="button" onClick={loadUsers} className="btn-secondary px-4 py-2 text-xs">
+                <button type="button" onClick={loadUsers} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">
                   Refresh
                 </button>
-                <button type="button" onClick={exportUsersCsv} className="btn-primary px-4 py-2 text-xs">
+                <button type="button" onClick={exportUsersCsv} className="btn-primary w-full px-4 py-2 text-xs sm:w-auto">
                   Export CSV
                 </button>
               </div>
@@ -2231,7 +2467,7 @@ export default function AdminPage() {
                     const canChangeRole = viewerRole === "super-admin" && !isSuper;
                     const canManageStatus = !isSuper;
                     const roleBusy = updatingRoleId === user.id;
-                    const avatar = mediaUrl(user.profilePhoto || "/avatar.png");
+                    const avatar = mediaUrl(user.profilePhoto || "/placeholder.png");
                     const pendingDeletion = Boolean(user.deletedAt);
                     const purgeCountdown = formatCountdown(user.purgeAt);
                     const lastLogin = user.lastLoginAt ? formatDateValue(user.lastLoginAt, true) : "Never";
@@ -2245,7 +2481,7 @@ export default function AdminPage() {
                               className="h-12 w-12 rounded-xl object-cover ring-1 ring-slate-200/70"
                               onError={(e) => {
                                 e.currentTarget.onerror = null;
-                                e.currentTarget.src = "/avatar.png";
+                                e.currentTarget.src = "/placeholder.png";
                               }}
                             />
                             <div className="min-w-0 flex-1">
@@ -2473,8 +2709,8 @@ export default function AdminPage() {
                     ))}
                   </div>
                 </div>
-                <div className="flex justify-end">
-                  <button type="submit" className="btn-primary" disabled={creatingUser}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <button type="submit" className="btn-primary w-full sm:w-auto" disabled={creatingUser}>
                     {creatingUser ? "Creating…" : "Create user"}
                   </button>
                 </div>
@@ -2567,7 +2803,7 @@ function EditSessionDialog({ open, period, form, states, loading, onChange, onCl
           e.preventDefault();
           if (!loading) onSubmit();
         }}
-        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-w-2xl"
       >
         <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-6 py-4">
           <div>
@@ -2584,7 +2820,7 @@ function EditSessionDialog({ open, period, form, states, loading, onChange, onCl
             ×
           </button>
         </div>
-        <div className="grid gap-6 px-6 py-6 md:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid gap-6 px-5 py-6 sm:px-6 md:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-4">
             <div>
               <label className="form-label" htmlFor="edit-title">Title</label>
@@ -2722,16 +2958,16 @@ function EditSessionDialog({ open, period, form, states, loading, onChange, onCl
             </div>
           </div>
         </div>
-        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50 px-6 py-4">
+        <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
             onClick={onClose}
-            className="btn-secondary"
+            className="btn-secondary w-full sm:w-auto"
             disabled={loading}
           >
             Cancel
           </button>
-          <button type="submit" className="btn-primary" disabled={loading}>
+          <button type="submit" className="btn-primary w-full sm:w-auto" disabled={loading}>
             {loading ? "Saving…" : "Save changes"}
           </button>
         </div>
@@ -2744,8 +2980,8 @@ function RescheduleDialog({ open, period, startValue, endValue, loading, onStart
   if (!open || !period) return null;
   return (
     <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/60 px-4">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl" role="dialog" aria-modal="true">
-        <div className="flex items-center justify-between">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg font-semibold text-slate-900">Reschedule session</h2>
           <button
             type="button"
@@ -2786,11 +3022,11 @@ function RescheduleDialog({ open, period, startValue, endValue, loading, onStart
           </div>
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
-          <button type="button" onClick={onClose} className="btn-secondary" disabled={loading}>
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end sm:gap-3">
+          <button type="button" onClick={onClose} className="btn-secondary w-full sm:w-auto" disabled={loading}>
             Cancel
           </button>
-          <button type="button" onClick={onSubmit} className="btn-primary" disabled={loading}>
+          <button type="button" onClick={onSubmit} className="btn-primary w-full sm:w-auto" disabled={loading}>
             {loading ? "Saving…" : "Save schedule"}
           </button>
         </div>
@@ -2803,7 +3039,7 @@ function OverviewList({ title, sessions, emptyText, badge }) {
   const items = (sessions || []).slice(0, 3);
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase text-slate-600">{badge}</span>
       </div>
@@ -2812,7 +3048,7 @@ function OverviewList({ title, sessions, emptyText, badge }) {
       ) : (
         <ul className="space-y-2 text-xs text-slate-600">
           {items.map((session) => (
-            <li key={session.id} className="flex flex-col">
+            <li key={session.id} className="flex flex-col rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
               <span className="font-semibold text-slate-900">{session.title || `Session #${session.id}`}</span>
               <span>{new Date(session.startTime).toLocaleString()} to {new Date(session.endTime).toLocaleString()}</span>
             </li>
@@ -2832,8 +3068,8 @@ function StatPill({ label, value, tone }) {
   };
   return (
     <div className={`rounded-2xl px-4 py-3 shadow-sm ${toneMap[tone] || "bg-slate-50 text-slate-600"}`}>
-      <div className="text-xs uppercase tracking-wide">{label}</div>
-      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-xl font-semibold text-slate-900 sm:text-2xl">{value}</div>
     </div>
   );
 }
@@ -2841,13 +3077,13 @@ function StatPill({ label, value, tone }) {
 function LivePanel({ live, refresh, viewerRole, onEnd }) {
   const canControl = ["admin", "super-admin"].includes((viewerRole || "").toLowerCase());
   return (
-    <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
-      <div className="flex items-center justify-between">
+    <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 md:p-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Live participation</h2>
           <p className="text-sm text-slate-500">Active sessions refresh every few seconds. Manually refresh for an instant snapshot.</p>
         </div>
-        <button type="button" onClick={refresh} className="btn-secondary px-4 py-2 text-xs">
+        <button type="button" onClick={refresh} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">
           Refresh now
         </button>
       </div>
@@ -2859,12 +3095,12 @@ function LivePanel({ live, refresh, viewerRole, onEnd }) {
         ) : (
           live.map(({ period, candidates }) => (
             <div key={period.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
                   <div className="text-xs text-slate-500">Ends {new Date(period.endTime).toLocaleString()}</div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {canControl && (
                     <button
                       type="button"
@@ -2879,7 +3115,7 @@ function LivePanel({ live, refresh, viewerRole, onEnd }) {
               </div>
               <div className="mt-3 space-y-2">
                 {candidates.map((candidate) => (
-                  <div key={candidate.id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3">
+                  <div key={candidate.id} className="flex flex-col gap-1 rounded-xl border border-slate-100 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-sm font-medium text-slate-900">{candidate.name}</span>
                     <span className="text-sm font-semibold text-slate-900">{candidate.votes} votes</span>
                   </div>
@@ -2912,13 +3148,13 @@ function AnalyticsDashboard({ data, loading, error, onRefresh }) {
   };
 
   return (
-    <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 md:p-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Analytics overview</h2>
           <p className="text-sm text-slate-500">Turnout, participation, and voter distribution insights.</p>
         </div>
-        <button type="button" onClick={onRefresh} className="btn-secondary px-4 py-2 text-xs">
+        <button type="button" onClick={onRefresh} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">
           Refresh analytics
         </button>
       </div>
@@ -3048,7 +3284,7 @@ function ResetPasswordDialog({ open, user, password, loading, onPasswordChange, 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/40 bg-white/95 p-6 shadow-xl">
+      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/40 bg-white/95 p-5 shadow-xl sm:p-6">
         <div className="space-y-3">
           <h3 className="text-lg font-semibold text-slate-900">Reset password</h3>
           <p className="text-sm text-slate-500">{user ? `Set a new password for ${user.fullName || user.username}.` : "Provide a replacement password."}</p>
@@ -3063,12 +3299,12 @@ function ResetPasswordDialog({ open, user, password, loading, onPasswordChange, 
           />
           <p className="text-xs text-slate-400">Minimum 8 characters. Share securely with the user after saving.</p>
         </div>
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <button type="button" onClick={onClose} className="btn-secondary px-5" disabled={loading}>Cancel</button>
-          <button type="button" onClick={onSubmit} className="btn-primary px-5" disabled={loading}>
-            {loading ? "Saving…" : "Save password"}
-          </button>
-        </div>
+          <div className="mt-6 flex flex-col items-stretch gap-2 sm:flex-row sm:justify-end sm:gap-3">
+            <button type="button" onClick={onClose} className="btn-secondary w-full sm:w-auto px-5" disabled={loading}>Cancel</button>
+            <button type="button" onClick={onSubmit} className="btn-primary w-full sm:w-auto px-5" disabled={loading}>
+              {loading ? "Saving…" : "Save password"}
+            </button>
+          </div>
       </div>
     </div>
   );
@@ -3078,12 +3314,12 @@ function CollapsibleSection({ title, description, action, defaultOpen = true, ch
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-[0_18px_50px_-45px_rgba(15,23,42,0.35)] backdrop-blur-sm md:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-2">
-        <div>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           {description && <p className="text-sm text-slate-500">{description}</p>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           {action}
           <button
             type="button"
@@ -3094,7 +3330,7 @@ function CollapsibleSection({ title, description, action, defaultOpen = true, ch
           </button>
         </div>
       </header>
-      {open && <div className="mt-4 space-y-3">{children}</div>}
+      {open && <div className="mt-4 space-y-4">{children}</div>}
     </section>
   );
 }
@@ -3255,10 +3491,10 @@ function LogsPanel({ viewerRole }) {
         title="Request logs"
         description="Inspect the 100 most recent significant API actions for troubleshooting."
         action={
-          <div className="flex gap-2">
-            <button type="button" onClick={load} className="btn-secondary px-4 py-2 text-xs">Reload</button>
-            <button type="button" onClick={exportJson} className="btn-secondary px-4 py-2 text-xs">Export JSON</button>
-            <button type="button" onClick={exportCsv} className="btn-primary px-4 py-2 text-xs">Export CSV</button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button type="button" onClick={load} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">Reload</button>
+            <button type="button" onClick={exportJson} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">Export JSON</button>
+            <button type="button" onClick={exportCsv} className="btn-primary w-full px-4 py-2 text-xs sm:w-auto">Export CSV</button>
           </div>
         }
         defaultOpen
@@ -3345,9 +3581,9 @@ function LogsPanel({ viewerRole }) {
           title="Audit trail"
           description="Immutable activity feed covering admin actions and key security events."
           action={
-            <div className="flex gap-2">
-              <button type="button" onClick={() => loadAudit({ filters: auditFilters })} className="btn-secondary px-4 py-2 text-xs">Reload</button>
-              <button type="button" onClick={exportAuditCsv} className="btn-primary px-4 py-2 text-xs">Export CSV</button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button type="button" onClick={() => loadAudit({ filters: auditFilters })} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">Reload</button>
+              <button type="button" onClick={exportAuditCsv} className="btn-primary w-full px-4 py-2 text-xs sm:w-auto">Export CSV</button>
             </div>
           }
           defaultOpen={false}
@@ -3378,15 +3614,15 @@ function LogsPanel({ viewerRole }) {
               value={auditFilters.end}
               onChange={(e) => setAuditFilters((prev) => ({ ...prev, end: e.target.value }))}
             />
-            <div className="flex gap-2">
-              <button type="submit" className="btn-secondary px-4 py-2 text-xs">Apply</button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button type="submit" className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">Apply</button>
               <button
                 type="button"
                 onClick={() => {
                   setAuditFilters({ actorId: "", start: "", end: "" });
                   loadAudit({ filters: { actorId: "", start: "", end: "" } });
                 }}
-                className="btn-secondary px-4 py-2 text-xs"
+                className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto"
               >
                 Clear
               </button>
