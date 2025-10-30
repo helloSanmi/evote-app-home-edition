@@ -335,6 +335,21 @@ async function ensureUserVerificationColumns() {
              AND (eligibilityStatus IS NULL OR eligibilityStatus IN ('active','disabled'))`);
 }
 
+async function ensurePasswordPolicyColumns() {
+  const [[resetColumn]] = await q(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME='Users'
+        AND COLUMN_NAME='mustResetPassword'`
+  );
+  if (!resetColumn) {
+    await q(`ALTER TABLE Users ADD COLUMN mustResetPassword TINYINT(1) NOT NULL DEFAULT 0 AFTER hasVoted`);
+  } else {
+    await q(`ALTER TABLE Users MODIFY COLUMN mustResetPassword TINYINT(1) NOT NULL DEFAULT 0`);
+  }
+}
+
 async function ensurePasswordResetTable() {
   await q(`
     CREATE TABLE IF NOT EXISTS UserPasswordReset (
@@ -391,6 +406,26 @@ async function ensureCookieConsentTable() {
   `);
 }
 
+async function ensureProfileChangeRequestTable() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS UserProfileChangeRequest (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      fields JSON NOT NULL,
+      notes VARCHAR(255) NULL,
+      approverId INT NULL,
+      approvedAt DATETIME NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT fk_profilechange_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE CASCADE,
+      CONSTRAINT fk_profilechange_approver FOREIGN KEY (approverId) REFERENCES Users(id) ON DELETE SET NULL,
+      KEY idx_profilechange_status (status, createdAt),
+      KEY idx_profilechange_user (userId, createdAt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
 async function alignRolesWithFlags() {
   const adminUsernames = envSet(process.env.ADMIN_USERNAMES);
   const adminEmails = envSet(process.env.ADMIN_EMAILS);
@@ -435,6 +470,7 @@ async function ensureSchema() {
   await ensureIdentityColumns();
   await ensureUserLifecycleColumns();
   await ensureUserVerificationColumns();
+  await ensurePasswordPolicyColumns();
   await ensureChatTables();
   await alignRolesWithFlags();
   await ensureRequestLogColumns();
@@ -443,6 +479,7 @@ async function ensureSchema() {
   await ensurePasswordResetTable();
   await ensureVotingPeriodNotificationColumns();
   await ensureCookieConsentTable();
+  await ensureProfileChangeRequestTable();
 }
 
 module.exports = { ensureSchema };

@@ -324,6 +324,7 @@ router.post("/register", async (req, res) => {
     const emailVerified = Boolean(createdUser?.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED;
     const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !privileged && !emailVerified;
     const completionRequired = requiresProfileCompletion(userForToken);
+    const requiresPasswordReset = Boolean(userForToken.mustResetPassword);
 
     res.json({
       success: true,
@@ -342,6 +343,7 @@ router.post("/register", async (req, res) => {
       emailVerified,
       requiresEmailVerification,
       activationPending: requiresEmailVerification,
+      requiresPasswordReset,
     });
   } catch (e) {
     if (e?.code === "ER_DUP_ENTRY") {
@@ -537,6 +539,7 @@ router.post("/login", async (req, res) => {
       ip: req.ip || null,
     });
     const completionRequired = requiresProfileCompletion(userForToken);
+    const requiresPasswordReset = Boolean(u.mustResetPassword);
     res.json({
       token,
       userId: u.id,
@@ -552,6 +555,7 @@ router.post("/login", async (req, res) => {
       requiresProfileCompletion: completionRequired,
       emailVerified,
       requiresEmailVerification,
+      requiresPasswordReset,
     });
   } catch (err) {
     console.error("auth/login:", err);
@@ -701,6 +705,7 @@ router.post("/google", async (req, res) => {
       ip: req.ip || null,
     });
     const completionRequired = requiresProfileCompletion(user);
+    const requiresPasswordReset = Boolean(user.mustResetPassword);
     res.json({
       token,
       userId: user.id,
@@ -716,6 +721,7 @@ router.post("/google", async (req, res) => {
       requiresProfileCompletion: completionRequired,
       emailVerified: Boolean(user.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED,
       requiresEmailVerification: false,
+      requiresPasswordReset,
     });
   } catch (err) {
     console.error("auth/google:", err);
@@ -873,6 +879,7 @@ router.post("/microsoft", async (req, res) => {
       ip: req.ip || null,
     });
     const completionRequired = requiresProfileCompletion(user);
+    const requiresPasswordReset = Boolean(user.mustResetPassword);
     res.json({
       token,
       userId: user.id,
@@ -888,6 +895,7 @@ router.post("/microsoft", async (req, res) => {
       requiresProfileCompletion: completionRequired,
       emailVerified: Boolean(user.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED,
       requiresEmailVerification: false,
+      requiresPasswordReset,
     });
   } catch (err) {
     if (err?.message === "MICROSOFT_NOT_CONFIGURED") {
@@ -935,6 +943,7 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
     const completionRequired = requiresProfileCompletion(normalizedUser);
     const emailVerified = Boolean(u.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED;
     const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !isAdmin && !emailVerified && Boolean(u.activationToken);
+    const requiresPasswordReset = Boolean(normalizedUser.mustResetPassword);
     res.json({
       token,
       role,
@@ -947,6 +956,7 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
       requiresProfileCompletion: completionRequired,
       emailVerified,
       requiresEmailVerification,
+      requiresPasswordReset,
     });
   } catch (err) {
     console.error("auth/refresh-role:", err);
@@ -1006,7 +1016,7 @@ router.post("/reset-password", async (req, res) => {
       return res.status(410).json({ error: "TOKEN_EXPIRED", message: "Reset link has expired. Request a new one." });
     }
     const hash = await bcrypt.hash(String(password), 10);
-    await q(`UPDATE Users SET password=? WHERE id=?`, [hash, record.userId]);
+    await q(`UPDATE Users SET password=?, mustResetPassword=0 WHERE id=?`, [hash, record.userId]);
     await emailService.markPasswordResetUsed(token);
     await recordAuditEvent({
       actorId: record.userId,
@@ -1031,7 +1041,7 @@ router.post("/reset-simple", async (req, res) => {
     const [[u]] = await q(`SELECT id FROM Users WHERE username=? AND dateOfBirth=? AND phone=? LIMIT 1`, [username, dateOfBirth, phone]);
     if (!u) return res.status(404).json({ error: "NOT_FOUND", message: "No matching user" });
     const hash = await bcrypt.hash(newPassword, 10);
-    await q(`UPDATE Users SET password=? WHERE id=?`, [hash, u.id]);
+    await q(`UPDATE Users SET password=?, mustResetPassword=0 WHERE id=?`, [hash, u.id]);
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: "SERVER" });

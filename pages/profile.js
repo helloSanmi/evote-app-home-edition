@@ -22,6 +22,15 @@ export default function Profile() {
     gender: "",
     residenceAddress: "",
   });
+  const [protectedForm, setProtectedForm] = useState({
+    email: "",
+    username: "",
+    nationalId: "",
+    voterCardNumber: "",
+  });
+  const [changeRequests, setChangeRequests] = useState([]);
+  const [changeRequestsLoading, setChangeRequestsLoading] = useState(false);
+  const [changeSubmitting, setChangeSubmitting] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const pendingDeletion = Boolean(user?.deletedAt);
@@ -90,12 +99,62 @@ export default function Profile() {
           gender: (me.gender || "").toLowerCase(),
           residenceAddress: me.residenceAddress || "",
         });
+        loadChangeRequests({ silent: true });
       } catch (e) {
         notifyError(e.message || "Failed to load profile");
       }
     })();
     return () => (isMounted = false);
   }, []);
+
+  const hasPendingProtectedRequest = useMemo(() => changeRequests.some((req) => req.status === "pending"), [changeRequests]);
+
+  async function loadChangeRequests(options = {}) {
+    const { silent = false } = options;
+    if (!silent) setChangeRequestsLoading(true);
+    try {
+      const data = await jget("/api/profile/change-requests");
+      setChangeRequests(Array.isArray(data) ? data : []);
+    } catch (err) {
+      if (!silent) notifyError(err.message || "Unable to load change history");
+      setChangeRequests([]);
+    } finally {
+      if (!silent) setChangeRequestsLoading(false);
+    }
+  }
+
+  function updateProtectedField(key, value) {
+    setProtectedForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function submitProtectedChanges(e) {
+    e?.preventDefault?.();
+    if (changeSubmitting) return;
+    const payload = {};
+    const email = protectedForm.email.trim();
+    const username = protectedForm.username.trim();
+    const nationalId = protectedForm.nationalId.trim();
+    const pvc = protectedForm.voterCardNumber.trim();
+    if (email) payload.email = email;
+    if (username) payload.username = username;
+    if (nationalId) payload.nationalId = nationalId;
+    if (pvc) payload.voterCardNumber = pvc;
+    if (!Object.keys(payload).length) {
+      notifyError("Enter at least one new value to request a change.");
+      return;
+    }
+    setChangeSubmitting(true);
+    try {
+      await jpost("/api/profile/change-request", payload);
+      notifySuccess("Change request submitted for review");
+      setProtectedForm({ email: "", username: "", nationalId: "", voterCardNumber: "" });
+      await loadChangeRequests({ silent: true });
+    } catch (err) {
+      notifyError(err.message || "Unable to submit request");
+    } finally {
+      setChangeSubmitting(false);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -293,6 +352,109 @@ export default function Profile() {
         <Field label="Nationality" value={user.nationality || "Nigerian"} />
         <Field label="National ID (NIN)" value={user.nationalId || "-"} />
         <Field label="PVC number" value={user.voterCardNumber || "-"} />
+      </div>
+
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Request protected changes</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Email, username, National ID, and PVC updates require a super admin to approve them. Submit the details you want to change and we’ll notify you once they’re reviewed.
+          </p>
+        </div>
+        {hasPendingProtectedRequest && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+            You already have a request awaiting review. You can send a new one after it is approved or rejected.
+          </div>
+        )}
+        <form className="grid gap-3 md:grid-cols-2" onSubmit={submitProtectedChanges}>
+          <div>
+            <label className="form-label" htmlFor="protected-email">New email</label>
+            <input
+              id="protected-email"
+              type="email"
+              className="form-control"
+              placeholder={user.email || "Current email"}
+              value={protectedForm.email}
+              onChange={(e) => updateProtectedField("email", e.target.value)}
+              disabled={hasPendingProtectedRequest || changeSubmitting}
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="protected-username">New username</label>
+            <input
+              id="protected-username"
+              className="form-control"
+              placeholder={user.username || "Current username"}
+              value={protectedForm.username}
+              onChange={(e) => updateProtectedField("username", e.target.value)}
+              disabled={hasPendingProtectedRequest || changeSubmitting}
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="protected-nin">New National ID (5 digits)</label>
+            <input
+              id="protected-nin"
+              className="form-control"
+              placeholder={user.nationalId || "Current NIN"}
+              value={protectedForm.nationalId}
+              onChange={(e) => updateProtectedField("nationalId", e.target.value.replace(/[^0-9]/g, ""))}
+              maxLength={5}
+              disabled={hasPendingProtectedRequest || changeSubmitting}
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="protected-pvc">New PVC (1 letter + 2 digits)</label>
+            <input
+              id="protected-pvc"
+              className="form-control"
+              placeholder={user.voterCardNumber || "Current PVC"}
+              value={protectedForm.voterCardNumber}
+              onChange={(e) => updateProtectedField("voterCardNumber", e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+              maxLength={3}
+              disabled={hasPendingProtectedRequest || changeSubmitting}
+            />
+          </div>
+          <div className="md:col-span-2 flex justify-end">
+            <button type="submit" className="btn-primary px-4 py-2 text-sm disabled:opacity-50" disabled={hasPendingProtectedRequest || changeSubmitting}>
+              {changeSubmitting ? "Sending…" : "Submit request"}
+            </button>
+          </div>
+        </form>
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-slate-900">Recent requests</h3>
+          {changeRequestsLoading ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">Loading history…</div>
+          ) : changeRequests.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">No recorded requests yet.</div>
+          ) : (
+            <ul className="space-y-2 text-xs text-slate-600">
+              {changeRequests.map((request) => {
+                const status = String(request.status || "pending").toLowerCase();
+                const tone = status === "approved" ? "text-emerald-600" : status === "rejected" ? "text-rose-600" : "text-amber-600";
+                return (
+                  <li key={request.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className={`text-[11px] font-semibold uppercase tracking-wide ${tone}`}>{status}</span>
+                      <span className="text-[11px] text-slate-400">{new Date(request.createdAt).toLocaleString()}</span>
+                    </div>
+                    <ul className="mt-2 grid gap-1 text-slate-700 md:grid-cols-2">
+                      {Object.entries(request.fields || {}).map(([key, value]) => (
+                        <li key={key} className="break-words">
+                          <span className="font-semibold text-slate-500">{key}:</span> {value || "(cleared)"}
+                        </li>
+                      ))}
+                    </ul>
+                    {request.notes && (
+                      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+                        Note: {request.notes}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
 
       {/* Change password card (link to /reset-password flow you described) */}

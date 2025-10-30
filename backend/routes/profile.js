@@ -22,6 +22,8 @@ const {
   requiresProfileCompletion,
   deriveNameParts,
 } = require("../utils/identity");
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,40}$/;
 
 // storage: /uploads/profile
 const disk = multer.diskStorage({
@@ -61,6 +63,176 @@ router.get("/me", requireAuth, async (req, res) => {
     res.status(500).json({ error: "SERVER" });
   }
 });
+
+router.post("/password/change", requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof newPassword !== "string" || newPassword.trim().length < 8) {
+      return res.status(400).json({ error: "INVALID_PASSWORD", message: "New password must be at least 8 characters." });
+    }
+    if (typeof currentPassword !== "string" || !currentPassword.trim()) {
+      return res.status(400).json({ error: "MISSING_CURRENT_PASSWORD", message: "Current password is required." });
+    }
+    const [[user]] = await q(`SELECT id, password, mustResetPassword FROM Users WHERE id=?`, [req.user.id]);
+    if (!user) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
+    }
+    const matches = await bcrypt.compare(currentPassword.trim(), user.password || "");
+    if (!matches) {
+      return res.status(403).json({ error: "INVALID_CURRENT_PASSWORD", message: "Current password is incorrect." });
+    }
+    if (currentPassword.trim() === newPassword.trim()) {
+      return res.status(400).json({ error: "PASSWORD_UNCHANGED", message: "Choose a different password." });
+    }
+    const hash = await bcrypt.hash(newPassword.trim(), 10);
+    await q(`UPDATE Users SET password=?, mustResetPassword=0 WHERE id=?`, [hash, req.user.id]);
+    await recordAuditEvent({
+      actorId: req.user.id,
+      actorRole: (req.user?.role || "user").toLowerCase(),
+      action: "user.password.change",
+      entityType: "user",
+      entityId: String(req.user.id),
+      notes: user.mustResetPassword ? "Password reset after admin invite" : "Password changed by user",
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("profile/password.change:", err);
+    res.status(500).json({ error: "SERVER", message: "Unable to update password" });
+  }
+});
+
+router.get("/change-requests", requireAuth, async (req, res) => {
+  try {
+    const [rows] = await q(
+      `SELECT id, status, fields, notes, approverId, approvedAt, createdAt, updatedAt
+         FROM UserProfileChangeRequest
+        WHERE userId=?
+        ORDER BY createdAt DESC
+        LIMIT 20`,
+      [req.user.id]
+    );
+    const mapped = (rows || []).map((row) => ({
+      ...row,
+      fields: safeJsonParse(row.fields),
+    }));
+    res.json(mapped);
+  } catch (err) {
+    console.error("profile/change-requests:list", err);
+    res.status(500).json({ error: "SERVER", message: "Unable to load change requests" });
+  }
+});
+
+router.post("/change-request", requireAuth, async (req, res) => {
+  try {
+    const { email, username, nationalId, voterCardNumber } = req.body || {};
+    const [[user]] = await q(
+      `SELECT id, email, username, nationalId, voterCardNumber FROM Users WHERE id=? LIMIT 1`,
+      [req.user.id]
+    );
+    if (!user) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
+    }
+
+    const changes = {};
+
+    if (email !== undefined) {
+      const trimmed = String(email || "").trim();
+      if (!trimmed || !EMAIL_PATTERN.test(trimmed)) {
+        return res.status(400).json({ error: "INVALID_EMAIL", message: "Provide a valid email address." });
+      }
+      if (trimmed.toLowerCase() !== String(user.email || "").toLowerCase()) {
+        const [[dup]] = await q(`SELECT id FROM Users WHERE email=? AND id<>? LIMIT 1`, [trimmed, req.user.id]);
+        if (dup) {
+          return res.status(409).json({ error: "EMAIL_TAKEN", message: "Another account already uses this email." });
+        }
+        changes.email = trimmed;
+      }
+    }
+
+    if (username !== undefined) {
+      const trimmed = String(username || "").trim();
+      if (!USERNAME_PATTERN.test(trimmed)) {
+        return res.status(400).json({ error: "INVALID_USERNAME", message: "Username must be 3-40 characters using letters, numbers, or _.-" });
+      }
+      if (trimmed.toLowerCase() !== String(user.username || "").toLowerCase()) {
+        const [[dup]] = await q(`SELECT id FROM Users WHERE username=? AND id<>? LIMIT 1`, [trimmed, req.user.id]);
+        if (dup) {
+          return res.status(409).json({ error: "USERNAME_TAKEN", message: "This username is already taken." });
+        }
+        changes.username = trimmed;
+      }
+    }
+
+    if (nationalId !== undefined) {
+      const trimmed = String(nationalId || "").replace(/\s+/g, "");
+      if (!trimmed || !NATIONAL_ID_PATTERN.test(trimmed)) {
+        return res.status(400).json({ error: "INVALID_NIN", message: "National Identification Number must be 5 digits." });
+      }
+      if (trimmed !== String(user.nationalId || "")) {
+        const [[dup]] = await q(`SELECT id FROM Users WHERE nationalId=? AND id<>? LIMIT 1`, [trimmed, req.user.id]);
+        if (dup) {
+          return res.status(409).json({ error: "NIN_TAKEN", message: "This National ID is already registered." });
+        }
+        changes.nationalId = trimmed;
+      }
+    }
+
+    if (voterCardNumber !== undefined) {
+      const trimmed = String(voterCardNumber || "").replace(/\s+/g, "").toUpperCase();
+      if (!trimmed || !PVC_PATTERN.test(trimmed)) {
+        return res.status(400).json({ error: "INVALID_PVC", message: "PVC must start with one letter followed by two digits." });
+      }
+      if (trimmed !== String(user.voterCardNumber || "")) {
+        const [[dup]] = await q(`SELECT id FROM Users WHERE voterCardNumber=? AND id<>? LIMIT 1`, [trimmed, req.user.id]);
+        if (dup) {
+          return res.status(409).json({ error: "PVC_TAKEN", message: "This PVC number is already registered." });
+        }
+        changes.voterCardNumber = trimmed;
+      }
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return res.status(400).json({ error: "NO_CHANGES", message: "Provide at least one updated value different from your current details." });
+    }
+
+    const [[pending]] = await q(
+      `SELECT id FROM UserProfileChangeRequest WHERE userId=? AND status='pending' LIMIT 1`,
+      [req.user.id]
+    );
+    if (pending) {
+      return res.status(409).json({ error: "REQUEST_PENDING", message: "You already have a pending change request awaiting review." });
+    }
+
+    await q(
+      `INSERT INTO UserProfileChangeRequest (userId, fields) VALUES (?, ?)`,
+      [req.user.id, JSON.stringify(changes)]
+    );
+
+    await recordAuditEvent({
+      actorId: req.user.id,
+      actorRole: (req.user?.role || "user").toLowerCase(),
+      action: "profile.change.requested",
+      entityType: "user",
+      entityId: String(req.user.id),
+      after: changes,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("profile/change-request:create", err);
+    res.status(500).json({ error: "SERVER", message: "Could not submit change request" });
+  }
+});
+
+function safeJsonParse(value) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
 
 // change profile fields (allowed subset)
 router.put("/", requireAuth, async (req, res) => {

@@ -14,9 +14,11 @@ import { notifyError, notifySuccess } from "../components/Toast";
 import NG from "../public/ng-states-lgas.json";
 import { getSocket } from "../lib/socket";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { mediaUrl } from "../lib/mediaUrl";
 import DateTimePicker from "../components/DateTimePicker";
 import { resolveSessionTiming, formatCountdown } from "../lib/time";
+import CollapsibleSection from "../components/admin/CollapsibleSection";
+import UsersListPanel from "../components/admin/UsersListPanel";
+import CreateUserPanel from "../components/admin/CreateUserPanel";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -26,6 +28,9 @@ export default function AdminPage() {
     []
   );
 
+  const [viewerRole, setViewerRole] = useState("user");
+  const [viewerState, setViewerState] = useState("");
+
   const states = useMemo(() => {
     if (Array.isArray(NG?.states)) return NG.states.map((s) => ({ label: s.state || s.name, lgas: s.lgas || [] }));
     if (Array.isArray(NG)) return NG.map((s) => ({ label: s.state || s.name, lgas: s.lgas || [] }));
@@ -34,14 +39,37 @@ export default function AdminPage() {
     }
     return [];
   }, []);
+  const [stateOptions, setStateOptions] = useState(states);
+
+  useEffect(() => {
+    setStateOptions(() => {
+      if (viewerRole === "admin" && viewerState) {
+        return states.filter((state) => state.label.toLowerCase() === viewerState.toLowerCase());
+      }
+      return states;
+    });
+  }, [states, viewerRole, viewerState]);
 
   const [unpublished, setUnpublished] = useState([]);
   const [unpubLoading, setUnpubLoading] = useState(false);
 
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [userSearch, setUserSearch] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const [userPageSize, setUserPageSize] = useState(25);
+  const [userTotal, setUserTotal] = useState(0);
+  const [userStateFilter, setUserStateFilter] = useState("");
+  const [userLgaFilter, setUserLgaFilter] = useState("");
+  const [changeRequests, setChangeRequests] = useState([]);
+  const [changeRequestsLoading, setChangeRequestsLoading] = useState(false);
+  const [changeRequestsMeta, setChangeRequestsMeta] = useState({ total: 0, status: "pending" });
+  const [changeRequestNotes, setChangeRequestNotes] = useState({});
+  const [changeRequestStatus, setChangeRequestStatus] = useState("pending");
+  const [changeRequestActionId, setChangeRequestActionId] = useState(null);
 
   const sessionsRef = useRef([]);
+  const userSearchReady = useRef(false);
   const statsRef = useRef({ active: 0, upcoming: 0, awaiting: 0 });
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
@@ -77,7 +105,6 @@ export default function AdminPage() {
 
   const [pendingAction, setPendingAction] = useState(null); // { type, period }
   const [tab, setTab] = useState("overview");
-  const [viewerRole, setViewerRole] = useState("user");
   const [resettingUser, setResettingUser] = useState(null);
   const [resetPassword, setResetPassword] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
@@ -109,6 +136,19 @@ export default function AdminPage() {
   const [editSessionSaving, setEditSessionSaving] = useState(false);
   const [editSessionForm, setEditSessionForm] = useState(() => defaultEditSessionForm());
 
+  useEffect(() => {
+    if (viewerRole !== "admin") return;
+    if (scope === "national") {
+      setScope("state");
+    }
+    if (!scopeState && viewerState) {
+      setScopeState(viewerState);
+    }
+    if (viewerState) {
+      setCState(viewerState);
+    }
+  }, [viewerRole, viewerState, scope, scopeState]);
+
   const resetCandidateForm = () => {
     setCName("");
     setCPhotoUrl("");
@@ -137,26 +177,45 @@ export default function AdminPage() {
     role: "user",
   });
   const [creatingUser, setCreatingUser] = useState(false);
-  const scopeOptions = useMemo(() => [
-    { value: "national", label: "National", detail: "All verified voters can participate." },
-    { value: "state", label: "State", detail: "Limited to a single state." },
-    { value: "local", label: "Local", detail: "Target a specific LGA." },
-  ], []);
+  const scopeOptions = useMemo(() => {
+    if (viewerRole === "admin") {
+      return [
+        {
+          value: "state",
+          label: "State",
+          detail: viewerState ? `Restricted to ${viewerState}.` : "Restricted to your assigned state.",
+        },
+        {
+          value: "local",
+          label: "Local",
+          detail: "Target an LGA within your assigned state.",
+        },
+      ];
+    }
+    return [
+      { value: "national", label: "National", detail: "All verified voters can participate." },
+      { value: "state", label: "State", detail: "Limited to a single state." },
+      { value: "local", label: "Local", detail: "Target a specific LGA." },
+    ];
+  }, [viewerRole, viewerState]);
 
   const tabs = useMemo(() => [
     { id: "overview", label: "Overview" },
     { id: "sessions", label: "Sessions" },
     { id: "live", label: "Live" },
-    { id: "archive", label: "Archive" },
+    { id: "archive", label: "Results" },
     { id: "analytics", label: "Analytics" },
     { id: "users", label: "Users" },
+    { id: "create-user", label: "Create User", roles: ["super-admin"] },
+    { id: "profile-approvals", label: "Profile Approvals", roles: ["super-admin"] },
     { id: "privacy", label: "Privacy & Consent" },
-    { id: "logs", label: "Request Logs" },
+    { id: "logs", label: "Request Logs", roles: ["super-admin"] },
   ], []);
   const visibleTabs = useMemo(() => (
-    viewerRole === "super-admin"
-      ? tabs
-      : tabs.filter((tabItem) => tabItem.id !== "logs")
+    tabs.filter((tabItem) => {
+      if (tabItem.roles && !tabItem.roles.includes(viewerRole)) return false;
+      return true;
+    })
   ), [tabs, viewerRole]);
 
   const roleSummaries = useMemo(() => [
@@ -201,13 +260,52 @@ export default function AdminPage() {
     const role = (localStorage.getItem("role") || "user").toLowerCase();
     const privileged = role === "admin" || role === "super-admin";
     setViewerRole(role);
+    setViewerState(localStorage.getItem("state") || "");
     if (!token || !privileged) router.replace("/login");
   }, [router]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleStorage = () => {
+      setViewerState(localStorage.getItem("state") || "");
+    };
+    handleStorage();
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (tab !== "profile-approvals") return;
+    loadChangeRequests({ status: changeRequestStatus });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, changeRequestStatus]);
+
+  useEffect(() => {
+    if (!userSearchReady.current) {
+      userSearchReady.current = true;
+      return;
+    }
+    const handle = setTimeout(() => {
+      loadUsers({ search: userSearch, page: 1, silent: true });
+    }, 350);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userSearch]);
+
+  useEffect(() => {
+    if (viewerRole !== "admin") return;
+    if (!viewerState) return;
+    if (userStateFilter === viewerState && !userLgaFilter) return;
+    setUserStateFilter(viewerState);
+    setUserLgaFilter("");
+    loadUsers({ state: viewerState, lga: "", page: 1 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerRole, viewerState]);
 
   useEffect(() => {
     loadUnpublished();
@@ -409,8 +507,8 @@ export default function AdminPage() {
   }, [upcomingFilters.state, upcomingBaseSessions, states]);
 
   const scopeFilterOptions = useMemo(() => [
-    { value: "all", label: "All scopes" },
-    { value: "national", label: "National / Presidential" },
+    { value: "all", label: "All results" },
+    { value: "national", label: "National" },
     { value: "state", label: "State" },
     { value: "local", label: "Local Government" },
   ], []);
@@ -564,6 +662,38 @@ export default function AdminPage() {
     }
   }
 
+  async function loadChangeRequests(options = {}) {
+    const { status = changeRequestStatus, silent = false } = options;
+    if (!silent) setChangeRequestsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("status", status);
+      params.set("limit", "100");
+      const data = await apiGet(`/api/admin/profile-change-requests?${params.toString()}`);
+      const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+      setChangeRequests(items);
+      setChangeRequestNotes((prev) => {
+        if (!items.length) return {};
+        const preserved = {};
+        items.forEach((item) => {
+          if (prev[item.id]) preserved[item.id] = prev[item.id];
+        });
+        return preserved;
+      });
+      setChangeRequestsMeta({
+        total: Number.isFinite(data?.total) ? Number(data.total) : items.length,
+        status: data?.status || status,
+      });
+    } catch (err) {
+      setChangeRequests([]);
+      if (!silent) {
+        notifyError(err.message || "Failed to load change requests");
+      }
+    } finally {
+      if (!silent) setChangeRequestsLoading(false);
+    }
+  }
+
   const stats = useMemo(() => ({
     active: sessions.filter(isActive).length,
     upcoming: sessions.filter(isUpcoming).length,
@@ -620,16 +750,52 @@ export default function AdminPage() {
     }
   }
 
-  async function loadUsers() {
-    setUsersLoading(true);
+  async function loadUsers(options = {}) {
+    const {
+      search,
+      page,
+      pageSize,
+      silent = false,
+    } = options;
+    const hasStateOverride = Object.prototype.hasOwnProperty.call(options, "state");
+    const hasLgaOverride = Object.prototype.hasOwnProperty.call(options, "lga");
+    if (!silent) setUsersLoading(true);
     try {
-      const data = await apiGet("/api/admin/users");
-      setUsers(Array.isArray(data) ? data : []);
+      const effectiveSearch = search !== undefined ? search : userSearch;
+      const effectivePage = page || userPage;
+      const effectivePageSize = pageSize || userPageSize;
+      const effectiveState = hasStateOverride ? (options.state || "") : userStateFilter;
+      const effectiveLga = hasLgaOverride ? (options.lga || "") : userLgaFilter;
+      const params = new URLSearchParams();
+      if (effectiveSearch) params.set("search", effectiveSearch);
+      params.set("page", String(effectivePage));
+      params.set("pageSize", String(effectivePageSize));
+      if (effectiveState) params.set("state", effectiveState);
+      if (effectiveLga) params.set("lga", effectiveLga);
+      const qs = params.toString();
+      const data = await apiGet(`/api/admin/users${qs ? `?${qs}` : ""}`);
+      const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+      setUsers(items);
+      setUserTotal(Number.isFinite(data?.total) ? Number(data.total) : items.length);
+      setUserPage(Number.isFinite(data?.page) ? Number(data.page) : effectivePage);
+      setUserPageSize(Number.isFinite(data?.pageSize) ? Number(data.pageSize) : effectivePageSize);
+      if (search !== undefined) {
+        setUserSearch(search);
+      }
+      if (hasStateOverride) {
+        setUserStateFilter(effectiveState);
+      }
+      if (hasLgaOverride) {
+        setUserLgaFilter(effectiveLga);
+      }
     } catch (e) {
       setUsers([]);
-      notifyError(e.message || "Failed to load users");
+      setUserTotal(0);
+      if (!silent) {
+        notifyError(e.message || "Failed to load users");
+      }
     } finally {
-      setUsersLoading(false);
+      if (!silent) setUsersLoading(false);
     }
   }
 
@@ -667,6 +833,19 @@ export default function AdminPage() {
     return json.url;
   }
 
+  const handleUserStateFilterChange = (value) => {
+    const next = value || "";
+    setUserStateFilter(next);
+    setUserLgaFilter("");
+    loadUsers({ state: next, lga: "", page: 1 });
+  };
+
+  const handleUserLgaFilterChange = (value) => {
+    const next = value || "";
+    setUserLgaFilter(next);
+    loadUsers({ lga: next, page: 1 });
+  };
+
   async function handlePickImage(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -692,7 +871,8 @@ export default function AdminPage() {
     e.preventDefault();
     if (candidateSaving) return;
     const trimmedName = cName.trim();
-    const candidateState = scope === "national" ? cState : scopeState;
+    const candidateStateBase = scope === "national" ? cState : scopeState;
+    const candidateState = viewerRole === "admin" ? viewerState : candidateStateBase;
     const candidateLga = scope === "local" ? scopeLGA : cLga;
     if (!trimmedName) {
       notifyError("Provide the candidate's full name");
@@ -1089,6 +1269,12 @@ export default function AdminPage() {
     }
   }
 
+  const beginResetPassword = (user) => {
+    if (!user) return;
+    setResettingUser(user);
+    setResetPassword("");
+  };
+
   const updateNewUserField = (field, value) => {
     setNewUserForm((prev) => ({ ...prev, [field]: value }));
   };
@@ -1118,7 +1304,7 @@ export default function AdminPage() {
       });
       notifySuccess("New user created");
       setNewUserForm({ fullName: "", username: "", email: "", phone: "", state: "", residenceLGA: "", password: "", role: "user" });
-      await loadUsers();
+      await loadUsers({ silent: true });
     } catch (err) {
       notifyError(err.message || "Failed to create user");
     } finally {
@@ -1147,6 +1333,36 @@ export default function AdminPage() {
       notifySuccess("Users exported");
     } catch (err) {
       notifyError(err.message || "Failed to export users");
+    }
+  }
+
+  async function approveChangeRequest(requestId) {
+    const notes = (changeRequestNotes?.[requestId] || "").trim();
+    setChangeRequestActionId(requestId);
+    try {
+      await apiPost(`/api/admin/profile-change-requests/${requestId}/approve`, notes ? { notes } : {});
+      notifySuccess("Profile change approved");
+      setChangeRequestNotes((prev) => ({ ...prev, [requestId]: "" }));
+      await loadChangeRequests({ status: changeRequestStatus, silent: true });
+    } catch (err) {
+      notifyError(err.message || "Unable to approve request");
+    } finally {
+      setChangeRequestActionId(null);
+    }
+  }
+
+  async function rejectChangeRequest(requestId) {
+    const notes = (changeRequestNotes?.[requestId] || "").trim();
+    setChangeRequestActionId(requestId);
+    try {
+      await apiPost(`/api/admin/profile-change-requests/${requestId}/reject`, notes ? { notes } : {});
+      notifySuccess("Profile change rejected");
+      setChangeRequestNotes((prev) => ({ ...prev, [requestId]: "" }));
+      await loadChangeRequests({ status: changeRequestStatus, silent: true });
+    } catch (err) {
+      notifyError(err.message || "Unable to reject request");
+    } finally {
+      setChangeRequestActionId(null);
     }
   }
 
@@ -1270,11 +1486,12 @@ export default function AdminPage() {
     }
   };
 
-  const candidateState = states.find((s) => s.label === cState);
+  const selectedStateLabel = scope === "national" ? cState : scopeState;
+  const candidateState = stateOptions.find((s) => s.label === (selectedStateLabel || viewerState));
   const candidateLgas = candidateState?.lgas || [];
   const availableLgas = scope === "national"
     ? candidateLgas
-    : (states.find((state) => state.label === scopeState)?.lgas || []);
+    : (stateOptions.find((state) => state.label === scopeState)?.lgas || []);
   const formatDateValue = (value, withTime = false) => {
     if (!value) return "N/A";
     const date = new Date(value);
@@ -1299,6 +1516,12 @@ export default function AdminPage() {
     const value = String(status || "").trim().toLowerCase();
     if (value === "disabled") return "bg-rose-50 text-rose-600";
     if (value === "active") return "bg-emerald-50 text-emerald-600";
+    return "bg-amber-50 text-amber-600";
+  };
+  const approvalBadgeTone = (status) => {
+    const value = String(status || "").trim().toLowerCase();
+    if (value === "approved") return "bg-emerald-50 text-emerald-600";
+    if (value === "rejected") return "bg-rose-50 text-rose-600";
     return "bg-amber-50 text-amber-600";
   };
   const roleBadgeTone = (role) => {
@@ -1403,13 +1626,13 @@ export default function AdminPage() {
         </div>
       </header>
 
-      <nav className="sticky top-16 z-30 mb-6 flex gap-2 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white/90 px-3 py-2 shadow-sm backdrop-blur-md sm:top-20 sm:flex-wrap sm:whitespace-normal">
+      <nav className="sticky top-16 z-30 mb-6 flex flex-wrap gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur md:top-20 md:flex-nowrap">
         {visibleTabs.map((item) => (
           <button
             key={item.id}
             type="button"
             onClick={() => setTab(item.id)}
-            className={`flex-shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition sm:px-4 sm:py-2 sm:text-sm ${
+            className={`flex-shrink-0 rounded-md border px-3 py-1.5 text-xs font-semibold transition sm:px-4 sm:py-2 sm:text-sm ${
               tab === item.id
                 ? "border-indigo-200 bg-indigo-50 text-indigo-700 shadow"
                 : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
@@ -1480,6 +1703,205 @@ export default function AdminPage() {
               })}
             </div>
           </CollapsibleSection>
+        </div>
+      )}
+
+      {tab === "create-user" && viewerRole === "super-admin" && (
+        <div className="space-y-5">
+          <CollapsibleSection
+            title="Create a user"
+            description="Onboard voters or admins manually with a temporary password."
+            defaultOpen
+          >
+            <CreateUserPanel
+              newUserForm={newUserForm}
+              onFieldChange={updateNewUserField}
+              onSubmit={createNewUser}
+              creatingUser={creatingUser}
+              stateOptions={stateOptions}
+              viewerRole={viewerRole}
+              viewerState={viewerState}
+            />
+          </CollapsibleSection>
+          <p className="text-xs text-slate-500">
+            Tip: share the temporary password securely. Users will be prompted to update it after signing in.
+          </p>
+        </div>
+      )}
+
+      {tab === "create-user" && viewerRole !== "super-admin" && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-6 text-sm text-amber-700">
+          Only super admins can create accounts manually.
+        </div>
+      )}
+
+      {tab === "profile-approvals" && viewerRole === "super-admin" && (
+        <div className="space-y-5">
+          <CollapsibleSection
+            title="Profile change requests"
+            description="Review sensitive updates to email, username, PVC, or national ID."
+            defaultOpen
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                {[{ value: "pending", label: "Pending" }, { value: "approved", label: "Approved" }, { value: "rejected", label: "Rejected" }].map((status) => (
+                  <button
+                    key={status.value}
+                    type="button"
+                    onClick={() => setChangeRequestStatus(status.value)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      changeRequestStatus === status.value
+                        ? "border border-indigo-300 bg-indigo-100 text-indigo-800 shadow-sm"
+                        : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    {status.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">{changeRequestsMeta.total} request{changeRequestsMeta.total === 1 ? "" : "s"}</span>
+                <button type="button" onClick={() => loadChangeRequests({ status: changeRequestStatus })} className="btn-secondary px-3 py-1 text-xs">
+                  Refresh
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {changeRequestsLoading ? (
+                <div className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500 animate-pulse">Loading requests…</div>
+              ) : changeRequests.length === 0 ? (
+                <div className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500">No requests in this view.</div>
+              ) : (
+                changeRequests.map((request) => {
+                  const fields = request.fields || {};
+                  const fieldEntries = Object.entries(fields);
+                  const actionDisabled = changeRequestActionId === request.id;
+                  const status = (request.status || "pending").toLowerCase();
+                  const fieldLabels = {
+                    email: "Email address",
+                    username: "Username",
+                    nationalId: "National ID (NIN)",
+                    voterCardNumber: "PVC Number",
+                  };
+                  const formatCurrentValue = (value) => {
+                    if (value === null || value === undefined) return "—";
+                    const text = String(value).trim();
+                    return text ? text : "—";
+                  };
+                  const formatNextValue = (value) => {
+                    if (value === null || value === undefined) return "(cleared)";
+                    const text = String(value).trim();
+                    return text ? text : "(cleared)";
+                  };
+                  const changes = fieldEntries.map(([key, value]) => ({
+                    key,
+                    label: fieldLabels[key] || key,
+                    current: formatCurrentValue(request[key]),
+                    next: formatNextValue(value),
+                  }));
+                  const userName = request.fullName || request.username || `User #${request.userId}`;
+                  const userHandle = [request.username ? `@${request.username}` : "", request.email || ""].filter(Boolean).join(" • ");
+                  const locationLabel = [request.state, request.residenceLGA].filter(Boolean).join(" • ");
+                  const roleChip = request.role ? request.role.replace(/-/g, " ") : "";
+                  const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+                  return (
+                    <article key={request.id} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm shadow-indigo-500/5">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-semibold text-slate-900">{userName}</h3>
+                          {userHandle && <p className="text-xs text-slate-500">{userHandle}</p>}
+                          <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+                            {roleChip && (
+                              <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-slate-600">{roleChip}</span>
+                            )}
+                            {locationLabel && (
+                              <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-slate-600">{locationLabel}</span>
+                            )}
+                            {request.phone && (
+                              <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-slate-600">{request.phone}</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Requested {formatDateValue(request.createdAt, true)}
+                          </div>
+                          {status !== "pending" && (
+                            <div className="text-xs text-slate-500">
+                              {status === "approved" ? "Approved" : "Rejected"} {request.approvedAt ? formatDateValue(request.approvedAt, true) : "recently"}
+                            </div>
+                          )}
+                        </div>
+                        <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${approvalBadgeTone(status)}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        {changes.length === 0 ? (
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                            No updated fields were submitted.
+                          </div>
+                        ) : (
+                          changes.map((change) => (
+                            <div key={change.key} className="rounded-xl border border-slate-200 bg-white/60 p-3 text-xs">
+                              <p className="text-sm font-semibold text-slate-700">{change.label}</p>
+                              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                <div className="rounded-lg bg-slate-100 px-3 py-2 text-[11px] text-slate-600">
+                                  <span className="font-semibold text-slate-700">Current:</span> {change.current}
+                                </div>
+                                <div className="rounded-lg bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
+                                  <span className="font-semibold text-emerald-800">Requested:</span> {change.next}
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      {status === "pending" ? (
+                        <div className="mt-4 space-y-3">
+                          <textarea
+                            rows={2}
+                            className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                            placeholder="Add a note (optional)"
+                            value={changeRequestNotes?.[request.id] || ""}
+                            onChange={(e) => setChangeRequestNotes((prev) => ({ ...prev, [request.id]: e.target.value }))}
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => approveChangeRequest(request.id)}
+                              disabled={actionDisabled}
+                              className="btn-primary px-4 py-2 text-xs disabled:opacity-50"
+                            >
+                              {actionDisabled ? "Processing…" : "Approve"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => rejectChangeRequest(request.id)}
+                              disabled={actionDisabled}
+                              className="btn-secondary px-4 py-2 text-xs disabled:opacity-50"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        request.notes && (
+                          <div className="mt-4 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+                            Note: {request.notes}
+                          </div>
+                        )
+                      )}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </CollapsibleSection>
+        </div>
+      )}
+
+      {tab === "profile-approvals" && viewerRole !== "super-admin" && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-6 text-sm text-amber-700">
+          Only super admins can approve profile changes.
         </div>
       )}
 
@@ -1558,14 +1980,18 @@ export default function AdminPage() {
                             setScopeState(e.target.value);
                             setScopeLGA("");
                           }}
+                          disabled={viewerRole === "admin"}
                         >
                           <option value="">Choose state…</option>
-                          {states.map((state) => (
+                          {stateOptions.map((state) => (
                             <option key={state.label} value={state.label}>
                               {state.label}
                             </option>
                           ))}
                         </select>
+                        {viewerRole === "admin" && !viewerState && (
+                          <p className="mt-1 text-xs text-amber-600">Add your state in your profile to schedule sessions.</p>
+                        )}
                       </div>
                       {scope === "local" && (
                         <div>
@@ -1577,7 +2003,7 @@ export default function AdminPage() {
                             onChange={(e) => setScopeLGA(e.target.value)}
                           >
                             <option value="">Choose LGA…</option>
-                            {states.find((state) => state.label === scopeState)?.lgas?.map((lga) => (
+                            {stateOptions.find((state) => state.label === scopeState)?.lgas?.map((lga) => (
                               <option key={lga} value={lga}>
                                 {lga}
                               </option>
@@ -1741,17 +2167,20 @@ export default function AdminPage() {
                             <select
                               id="candidate-state"
                               className="form-control"
-                              value={scope === "national" ? cState : scopeState}
+                              value={viewerRole === "admin" ? viewerState : scope === "national" ? cState : scopeState}
                               onChange={(e) => setCState(e.target.value)}
-                              disabled={scope !== "national" || candidateSaving}
+                              disabled={candidateSaving || viewerRole === "admin" || scope !== "national"}
                             >
                               <option value="">Select state…</option>
-                              {states.map((state) => (
+                              {stateOptions.map((state) => (
                                 <option key={state.label} value={state.label}>
                                   {state.label}
                                 </option>
                               ))}
                             </select>
+                            {viewerRole === "admin" && !viewerState && (
+                              <p className="mt-1 text-xs text-amber-600">Update your profile with a state to stage candidates.</p>
+                            )}
                           </div>
                           <div>
                             <label className="form-label" htmlFor="candidate-lga">LGA</label>
@@ -2111,8 +2540,8 @@ export default function AdminPage() {
         <div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">Previous sessions</h2>
-              <p className="text-sm text-slate-500">Review ended elections and audit their results.</p>
+              <h2 className="text-lg font-semibold text-slate-900">Results</h2>
+              <p className="text-sm text-slate-500">Filter published outcomes by national, state, or local contests.</p>
             </div>
             <button type="button" onClick={loadSessions} className="btn-secondary w-full px-3 py-2 text-xs sm:w-auto">
               Reload
@@ -2430,293 +2859,33 @@ export default function AdminPage() {
           <CollapsibleSection
             title="Registered users"
             description={`Review sign-ups, manage eligibility, or remove accounts. Signed in as ${viewerRole === "super-admin" ? "Super Admin" : viewerRole === "admin" ? "Admin" : "User"}.`}
-            action={
-              <div className="flex gap-2">
-                <button type="button" onClick={loadUsers} className="btn-secondary w-full px-4 py-2 text-xs sm:w-auto">
-                  Refresh
-                </button>
-                <button type="button" onClick={exportUsersCsv} className="btn-primary w-full px-4 py-2 text-xs sm:w-auto">
-                  Export CSV
-                </button>
-              </div>
-            }
             defaultOpen
           >
-            <div className="space-y-4">
-              {usersLoading ? (
-                <div className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500 animate-pulse">Loading users…</div>
-              ) : users.length === 0 ? (
-                <div className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500">No registered users yet.</div>
-              ) : (
-                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                  {users.map((user) => {
-                    const targetRole = String(user.role || "user").toLowerCase();
-                    const rawStatus = String(user?.eligibilityStatus ?? "").trim();
-                    const statusKey = rawStatus ? rawStatus.toLowerCase() : "pending";
-                    const statusLabel = rawStatus
-                      ? `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).toLowerCase()}`
-                      : "Pending";
-                    const disabled = statusKey === "disabled";
-                    const roleLabel = (() => {
-                      if (targetRole === "super-admin") return "Super Admin";
-                      if (targetRole === "admin") return "Admin";
-                      return "User";
-                    })();
-                    const isSuper = targetRole === "super-admin";
-                    const canReset = ["admin", "super-admin"].includes(viewerRole) && !isSuper;
-                    const canChangeRole = viewerRole === "super-admin" && !isSuper;
-                    const canManageStatus = !isSuper;
-                    const roleBusy = updatingRoleId === user.id;
-                    const avatar = mediaUrl(user.profilePhoto || "/placeholder.png");
-                    const pendingDeletion = Boolean(user.deletedAt);
-                    const purgeCountdown = formatCountdown(user.purgeAt);
-                    const lastLogin = user.lastLoginAt ? formatDateValue(user.lastLoginAt, true) : "Never";
-                    return (
-                      <article key={user.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm shadow-indigo-500/5">
-                        <div className="flex flex-col gap-3">
-                          <div className="flex flex-wrap items-start gap-3">
-                            <img
-                              src={avatar}
-                              alt={user.fullName || user.username || `User #${user.id}`}
-                              className="h-12 w-12 rounded-xl object-cover ring-1 ring-slate-200/70"
-                              onError={(e) => {
-                                e.currentTarget.onerror = null;
-                                e.currentTarget.src = "/placeholder.png";
-                              }}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <h3 className="truncate text-base font-semibold text-slate-900">{user.fullName || user.username || "Unknown user"}</h3>
-                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${roleBadgeTone(targetRole)}`}>
-                                  {roleLabel}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-xs text-slate-500">ID #{user.id}{user.username ? ` • ${user.username}` : ""}</p>
-                              <div className="mt-1 space-y-1 text-xs text-slate-600">
-                                <div className="font-medium text-slate-700">{user.email || "No email"}</div>
-                                {user.phone && <div>{user.phone}</div>}
-                                <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-slate-400">
-                                  <span>Created {formatDateValue(user.createdAt, true)}</span>
-                                  <span>Last login {lastLogin}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2 text-xs font-semibold">
-                            <span className={`inline-flex items-center rounded-full px-3 py-1 ${statusBadgeTone(statusKey)}`}>
-                              {statusLabel}
-                            </span>
-                            {user.state && (
-                              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-slate-600">
-                                {user.state}{user.residenceLGA ? ` • ${user.residenceLGA}` : ""}
-                              </span>
-                            )}
-                            {user.dateOfBirth && (
-                              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-slate-600">
-                                DOB {formatDateValue(user.dateOfBirth)}
-                              </span>
-                            )}
-                          </div>
-
-                          {pendingDeletion && (
-                            <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
-                              Scheduled for deletion {purgeCountdown || "imminently"}
-                            </div>
-                          )}
-
-                          <div className="flex flex-wrap gap-2">
-                            {canChangeRole && (
-                              <div className="flex flex-wrap items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-500">
-                                <span>Role</span>
-                                <button
-                                  type="button"
-                                  disabled={roleBusy || targetRole === "admin"}
-                                  onClick={() => updateUserRole(user, "admin")}
-                                  className={`rounded-full px-3 py-1 transition ${
-                                    targetRole === "admin"
-                                      ? "border border-indigo-300 bg-indigo-100 text-indigo-800 shadow-sm"
-                                      : "border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-                                  }`}
-                                >
-                                  Admin
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={roleBusy || targetRole === "user"}
-                                  onClick={() => updateUserRole(user, "user")}
-                                  className={`rounded-full px-3 py-1 transition ${
-                                    targetRole === "user"
-                                      ? "border border-slate-300 bg-slate-100 text-slate-800 shadow-sm"
-                                      : "border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-                                  }`}
-                                >
-                                  User
-                                </button>
-                              </div>
-                            )}
-                            {canManageStatus ? (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => setPendingAction({ type: disabled ? "user-enable" : "user-disable", user })}
-                                  className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                    disabled
-                                      ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-                                      : "border-amber-200 text-amber-600 hover:bg-amber-50"
-                                  } ${roleBusy ? "opacity-50" : ""}`}
-                                  disabled={roleBusy}
-                                >
-                                  {disabled ? "Enable" : "Disable"}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setPendingAction({ type: "user-delete", user })}
-                                  className="inline-flex items-center rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
-                                  disabled={roleBusy}
-                                >
-                                  Delete
-                                </button>
-                              </>
-                            ) : (
-                              <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-500">
-                                Protected account
-                              </span>
-                            )}
-                            {canReset && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setResettingUser(user);
-                                  setResetPassword("");
-                                }}
-                                disabled={roleBusy}
-                                className="inline-flex items-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-                              >
-                                Reset password
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <UsersListPanel
+              viewerRole={viewerRole}
+              viewerState={viewerState}
+              users={users}
+              usersLoading={usersLoading}
+              userSearch={userSearch}
+              userTotal={userTotal}
+              onSearchChange={setUserSearch}
+              onRefresh={() => loadUsers({ search: userSearch, state: userStateFilter, lga: userLgaFilter, page: 1 })}
+              onExport={exportUsersCsv}
+              onSetPendingAction={setPendingAction}
+              statusBadgeTone={statusBadgeTone}
+              roleBadgeTone={roleBadgeTone}
+              formatDateValue={formatDateValue}
+              formatCountdown={formatCountdown}
+              onUpdateRole={updateUserRole}
+              updatingRoleId={updatingRoleId}
+              onResetPassword={beginResetPassword}
+              stateOptions={stateOptions}
+              stateFilter={userStateFilter}
+              onStateFilterChange={handleUserStateFilterChange}
+              lgaFilter={userLgaFilter}
+              onLgaFilterChange={handleUserLgaFilterChange}
+            />
           </CollapsibleSection>
-
-          {viewerRole === "super-admin" && (
-            <CollapsibleSection
-              title="Create a user"
-              description="Super admins can onboard staff or voters instantly and assign roles."
-              defaultOpen={false}
-            >
-              <form className="space-y-4" onSubmit={createNewUser}>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label className="form-label" htmlFor="new-fullname">Full name</label>
-                    <input
-                      id="new-fullname"
-                      className="form-control"
-                      value={newUserForm.fullName}
-                      onChange={(e) => updateNewUserField("fullName", e.target.value)}
-                      placeholder="Jane Doe"
-                    />
-                  </div>
-                  <div>
-                    <label className="form-label" htmlFor="new-username">Username</label>
-                    <input
-                      id="new-username"
-                      className="form-control"
-                      value={newUserForm.username}
-                      onChange={(e) => updateNewUserField("username", e.target.value)}
-                      placeholder="janedoe"
-                    />
-                  </div>
-                  <div>
-                    <label className="form-label" htmlFor="new-email">Email</label>
-                    <input
-                      id="new-email"
-                      type="email"
-                      className="form-control"
-                      value={newUserForm.email}
-                      onChange={(e) => updateNewUserField("email", e.target.value)}
-                      placeholder="jane@mail.com"
-                    />
-                  </div>
-                  <div>
-                    <label className="form-label" htmlFor="new-phone">Phone (optional)</label>
-                    <input
-                      id="new-phone"
-                      className="form-control"
-                      value={newUserForm.phone}
-                      onChange={(e) => updateNewUserField("phone", e.target.value)}
-                      placeholder="0803..."
-                    />
-                  </div>
-                  <div>
-                    <label className="form-label" htmlFor="new-state">State (optional)</label>
-                    <input
-                      id="new-state"
-                      className="form-control"
-                      value={newUserForm.state}
-                      onChange={(e) => updateNewUserField("state", e.target.value)}
-                      placeholder="Lagos"
-                    />
-                  </div>
-                  <div>
-                    <label className="form-label" htmlFor="new-lga">Residence LGA (optional)</label>
-                    <input
-                      id="new-lga"
-                      className="form-control"
-                      value={newUserForm.residenceLGA}
-                      onChange={(e) => updateNewUserField("residenceLGA", e.target.value)}
-                      placeholder="Ikeja"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="form-label" htmlFor="new-password">Temporary password</label>
-                  <input
-                    id="new-password"
-                    type="password"
-                    className="form-control"
-                    value={newUserForm.password}
-                    onChange={(e) => updateNewUserField("password", e.target.value)}
-                    placeholder="Minimum 8 characters"
-                  />
-                </div>
-                <div>
-                  <span className="form-label">Role</span>
-                  <div className="mt-2 flex gap-2">
-                    {[
-                      { value: "user", label: "User" },
-                      { value: "admin", label: "Admin" },
-                    ].map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => updateNewUserField("role", option.value)}
-                        className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                          newUserForm.role === option.value
-                            ? "border border-indigo-300 bg-indigo-100 text-indigo-800 shadow-sm"
-                            : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                        }`}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                  <button type="submit" className="btn-primary w-full sm:w-auto" disabled={creatingUser}>
-                    {creatingUser ? "Creating…" : "Create user"}
-                  </button>
-                </div>
-              </form>
-            </CollapsibleSection>
-          )}
         </div>
       )}
 
@@ -2726,7 +2895,7 @@ export default function AdminPage() {
         open={!!editSessionTarget}
         period={editSessionTarget}
         form={editSessionForm}
-        states={states}
+        states={stateOptions}
         loading={editSessionSaving}
         onChange={handleEditSessionChange}
         onClose={closeEditSession}
@@ -3309,32 +3478,6 @@ function ResetPasswordDialog({ open, user, password, loading, onPasswordChange, 
     </div>
   );
 }
-
-function CollapsibleSection({ title, description, action, defaultOpen = true, children }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-[0_18px_50px_-45px_rgba(15,23,42,0.35)] backdrop-blur-sm md:p-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-1">
-          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          {description && <p className="text-sm text-slate-500">{description}</p>}
-        </div>
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-          {action}
-          <button
-            type="button"
-            onClick={() => setOpen((prev) => !prev)}
-            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
-          >
-            {open ? "Hide" : "Show"}
-          </button>
-        </div>
-      </header>
-      {open && <div className="mt-4 space-y-4">{children}</div>}
-    </section>
-  );
-}
-
 
 function LogsPanel({ viewerRole }) {
   const [rows, setRows] = useState(null);

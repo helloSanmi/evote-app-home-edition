@@ -715,7 +715,7 @@ router.post("/users/:id/reset-password", requireAuth, requireRole(["super-admin"
       return res.status(403).json({ error: "FORBIDDEN", message: "Only super admins can modify super admin accounts" });
     }
     const hash = await bcrypt.hash(password.trim(), 10);
-    await q(`UPDATE Users SET password=? WHERE id=?`, [hash, uid]);
+    await q(`UPDATE Users SET password=?, mustResetPassword=1 WHERE id=?`, [hash, uid]);
     await recordAuditEvent({
       actorId: req.user?.id || null,
       actorRole: (req.user?.role || "").toLowerCase() || null,

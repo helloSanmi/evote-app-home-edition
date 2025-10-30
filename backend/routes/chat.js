@@ -82,8 +82,8 @@ function rowToMessage(row) {
 
 const botResponses = [
   {
-    regex: /(reset|forgot).*password/i,
-    reply: "You can reset your password via the login page using the \"Forgot password\" link. If the link fails, let me know and I'll alert an admin for manual help.",
+    regex: /(reset|forgot|change).*password/i,
+    reply: "You can update your password from the Profile page under Security, or use the “Forgot password” link on the login screen. If an admin sent you a temporary password, sign in and follow the prompt to set a new one right away.",
   },
   {
     regex: /(create|launch).*session/i,
@@ -115,7 +115,11 @@ const botResponses = [
   },
   {
     regex: /(can't|cannot|can not).*find.*session/i,
-    reply: "If you can't find your session, head to the Sessions tab and make sure the election is active for your location. Refreshing the page can help too.",
+    reply: "If you can't find your session, open the Sessions tab (or Vote page for voters) and ensure the scope matches your state/LGA. Refreshing the page or clearing the filters in the Results/Upcoming lists often helps.",
+  },
+  {
+    regex: /(candidate).*(info|information|details|profile)/i,
+    reply: "Admins can review or edit candidate details from the staging area in Sessions before publishing. Voters will see each candidate’s bio and photo on the ballot card. Update the record and hit save to push fresh information live.",
   },
   {
     regex: /(result|outcome|winner).*session/i,

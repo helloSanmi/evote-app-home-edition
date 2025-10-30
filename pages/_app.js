@@ -48,6 +48,13 @@ export default function App({ Component, pageProps }) {
         } else if (data.role === "admin" || data.role === "super-admin") {
           localStorage.removeItem("needsProfileCompletion");
         }
+        if (typeof data.requiresPasswordReset === "boolean") {
+          if (data.requiresPasswordReset) {
+            localStorage.setItem("needsPasswordReset", "true");
+          } else {
+            localStorage.removeItem("needsPasswordReset");
+          }
+        }
         if (typeof data.emailVerified === "boolean") {
           localStorage.setItem("emailVerified", data.emailVerified ? "true" : "false");
         } else {
@@ -78,17 +85,22 @@ export default function App({ Component, pageProps }) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const enforceProfileCompletion = () => {
+    const enforceAccountFlows = () => {
       const token = localStorage.getItem("token");
+      const needsPasswordReset = localStorage.getItem("needsPasswordReset") === "true";
       const needsCompletion = localStorage.getItem("needsProfileCompletion") === "true";
       const role = (localStorage.getItem("role") || "user").toLowerCase();
       const privileged = role === "admin" || role === "super-admin";
+      if (token && needsPasswordReset && router.pathname !== "/force-password-reset") {
+        router.replace("/force-password-reset");
+        return;
+      }
       if (token && needsCompletion && !privileged && router.pathname !== "/complete-profile") {
         router.replace("/complete-profile");
       }
     };
-    enforceProfileCompletion();
-    const handleRouteChange = () => enforceProfileCompletion();
+    enforceAccountFlows();
+    const handleRouteChange = () => enforceAccountFlows();
     router.events.on("routeChangeComplete", handleRouteChange);
     return () => router.events.off("routeChangeComplete", handleRouteChange);
   }, [router]);

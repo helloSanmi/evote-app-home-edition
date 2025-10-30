@@ -45,6 +45,11 @@ export default function Login() {
     } else {
       localStorage.removeItem("needsProfileCompletion");
     }
+    if (data.requiresPasswordReset) {
+      localStorage.setItem("needsPasswordReset", "true");
+    } else {
+      localStorage.removeItem("needsPasswordReset");
+    }
     if (data.email) {
       localStorage.setItem("email", data.email);
     } else {
@@ -74,7 +79,10 @@ export default function Login() {
     }
     reidentifySocket();
     let destination = "/";
-    if (data.requiresProfileCompletion) {
+    if (data.requiresPasswordReset) {
+      destination = "/force-password-reset";
+      notifyInfo("Please set a new password to continue.");
+    } else if (data.requiresProfileCompletion) {
       destination = "/complete-profile";
     } else {
       const nextRole = (data.role || "user").toLowerCase();
