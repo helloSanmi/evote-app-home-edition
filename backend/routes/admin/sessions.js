@@ -533,6 +533,12 @@ module.exports = function registerSessionRoutes(router) {
     try {
       const scopeInfo = await resolveAdminScope(req);
       const pid = Number(req.body?.periodId || 0);
+      const reasonRaw = typeof req.body?.reason === "string" ? req.body.reason : "";
+      const trimmedReason = reasonRaw.trim();
+      if (!trimmedReason) {
+        return res.status(400).json({ error: "MISSING_REASON", message: "Provide a reason for ending the election early." });
+      }
+      const reason = trimmedReason.slice(0, 500);
       let period = null;
 
       if (pid) {
@@ -569,14 +575,14 @@ module.exports = function registerSessionRoutes(router) {
         return res.json({ success: true, already: true, periodId: period.id });
       }
 
-      await q(`UPDATE VotingPeriod SET forcedEnded=1 WHERE id=?`, [period.id]);
+      await q(`UPDATE VotingPeriod SET forcedEnded=1, forcedEndReason=? WHERE id=?`, [reason, period.id]);
       const io = req.app.get("io");
       io?.emit("periodEnded", { periodId: period.id, forced: true });
       await notify(io, {
         audience: "user",
         type: "session.ended",
         title: period.title ? `${period.title} ended early` : "Voting session ended",
-        message: "Administrators ended this election ahead of schedule.",
+        message: reason,
         scope: period.scope || "global",
         scopeState: period.scope !== "national" ? (period.scopeState || null) : null,
         scopeLGA: period.scope === "local" ? (period.scopeLGA || null) : null,
@@ -587,9 +593,11 @@ module.exports = function registerSessionRoutes(router) {
           scheduledEndTime: new Date(period.endTime).toISOString(),
           endedAt: new Date().toISOString(),
           forced: true,
+          reason,
         },
       });
       period.forcedEnded = 1;
+      period.forcedEndReason = reason;
       emailService.sendSessionLifecycleEmail("ended", period).catch((err) => {
         console.error("admin/end-early email", err);
       });
@@ -597,7 +605,7 @@ module.exports = function registerSessionRoutes(router) {
       await notifyAdminAction(io, req, {
         type: "admin.session.ended",
         title: "Session ended early",
-        message: `${actorLabel(req.user)} ended ${period.title || `session #${period.id}`} ahead of schedule.`,
+        message: `${actorLabel(req.user)} ended ${period.title || `session #${period.id}`} ahead of schedule. Reason: ${reason}`,
         scope: "global",
         periodId: period.id,
         metadata: {
@@ -605,6 +613,7 @@ module.exports = function registerSessionRoutes(router) {
           scheduledEndTime: new Date(period.endTime).toISOString(),
           endedAt: new Date().toISOString(),
           forced: true,
+          reason,
         },
       });
       res.json({ success: true, periodId: period.id });

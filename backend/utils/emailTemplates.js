@@ -1,6 +1,15 @@
 const APP_BASE_URL = process.env.APP_PUBLIC_URL?.replace(/\/$/, "") || "http://localhost:3000";
 const LOGO_URL = `${APP_BASE_URL}/logo.png`;
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function formatDateTime(value, timeZone = "Africa/Lagos") {
   if (!value) return "";
   const date = value instanceof Date ? value : new Date(value);
@@ -109,6 +118,7 @@ function sessionTemplate({ type, period, url }) {
     .join(" • ");
   let button = { href: url || `${APP_BASE_URL}/vote`, label: "Open voting hub" };
   const forced = Boolean(period?.forcedEnded);
+  const forcedReason = (period?.forcedEndReason || period?.metadata?.reason || "").trim();
 
   let subject = "";
   let lead = "";
@@ -138,6 +148,7 @@ function sessionTemplate({ type, period, url }) {
         body = `
           <p>Administrators ended <strong>${readableTitle}</strong> earlier than planned.</p>
           <p style="margin-top:12px;">Original end time: <strong>${formatDateTime(endTime)}</strong>.</p>
+          ${forcedReason ? `<p style="margin-top:12px;"><strong>Reason:</strong> ${escapeHtml(forcedReason)}</p>` : ""}
           <p style="margin-top:18px;">We appreciate your participation. Watch your dashboard for any follow-up announcements.</p>
         `;
       } else {

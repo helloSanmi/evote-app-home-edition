@@ -1,5 +1,5 @@
 // frontend/components/ConfirmDialog.js
-export default function ConfirmDialog({ open, title = "Confirm action", message, confirmLabel = "Confirm", cancelLabel = "Cancel", onConfirm, onCancel, tone = "indigo" }) {
+export default function ConfirmDialog({ open, title = "Confirm action", message, confirmLabel = "Confirm", cancelLabel = "Cancel", onConfirm, onCancel, tone = "indigo", children }) {
   if (!open) return null;
 
   const confirmClasses = tone === "danger"
@@ -14,6 +14,7 @@ export default function ConfirmDialog({ open, title = "Confirm action", message,
           <h3 className="text-xl font-semibold text-slate-900">{title}</h3>
           {message && <p className="text-sm text-slate-600">{message}</p>}
         </div>
+        {children ? <div className="mt-4">{children}</div> : null}
         <div className="mt-6 flex items-center justify-center gap-3">
           <button
             type="button"

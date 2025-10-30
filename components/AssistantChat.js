@@ -121,11 +121,11 @@ export default function AssistantChat() {
       return;
     }
     if (isAuthenticated) {
-      loadUserConversation({ notify: true });
+      loadUserConversation();
       return;
     }
     if (isGuestMode && guestToken) {
-      loadGuestConversation({ notify: true });
+      loadGuestConversation();
       return;
     }
     if (isGuestMode && !guestToken) {
@@ -169,7 +169,7 @@ export default function AssistantChat() {
       if (isAdmin) {
         loadAdminSessions();
       } else {
-        loadUserConversation({ notify: false });
+        loadUserConversation();
       }
     };
     const handleAvailabilityChange = () => {
@@ -270,14 +270,14 @@ export default function AssistantChat() {
     setGuestToken("");
   };
 
-  async function loadUserConversation({ notify = true, create = false } = {}) {
+  async function loadUserConversation({ create = false } = {}) {
     if (isGuestMode) {
       if (create) {
         await startGuestConversation();
         return;
       }
       if (!guestToken) return;
-      await loadGuestConversation({ notify });
+      await loadGuestConversation();
       return;
     }
     setLoading(true);
@@ -286,9 +286,6 @@ export default function AssistantChat() {
       const data = await apiGet(`/api/chat/session${query}`);
       setSession(data.session || null);
       setMessages(data.messages || []);
-      if (notify && data.session?.status === "pending") {
-        notifyInfo("Hang tight, an admin will join shortly.");
-      }
       scrollToBottom();
       if (create) {
         setInput("");
@@ -300,7 +297,7 @@ export default function AssistantChat() {
     }
   }
 
-  async function loadGuestConversation({ notify = true } = {}) {
+  async function loadGuestConversation() {
     if (!guestToken) return;
     setLoading(true);
     try {
@@ -310,9 +307,6 @@ export default function AssistantChat() {
       if (data.session?.userDisplayName) {
         persistGuestDetails(data.session.userDisplayName, guestToken);
       }
-      if (notify && data.session?.status === "pending") {
-        notifyInfo("Hang tight, an admin will join shortly.");
-      }
     } catch (err) {
       const message = err.message || "Unable to load chat";
       if (err.message?.toLowerCase().includes("not found")) {
@@ -320,7 +314,7 @@ export default function AssistantChat() {
         setSession(null);
         setMessages([]);
       }
-      if (notify) notifyError(message);
+      notifyError(message);
     } finally {
       setLoading(false);
     }
@@ -330,7 +324,7 @@ export default function AssistantChat() {
     if (isGuestMode) {
       await startGuestConversation();
     } else {
-      await loadUserConversation({ notify: true, create: true });
+      await loadUserConversation({ create: true });
     }
   }
 
@@ -353,9 +347,6 @@ export default function AssistantChat() {
       persistGuestDetails(displayName, data.token);
       setSession(data.session || null);
       setMessages(Array.isArray(data.messages) ? data.messages : []);
-      if (data.session?.status === "pending") {
-        notifyInfo("Hang tight, an admin will join shortly.");
-      }
       scrollToBottom();
     } catch (err) {
       notifyError(err.message || "Unable to start the chat");
@@ -478,10 +469,10 @@ export default function AssistantChat() {
           return;
         }
         await apiPost("/api/chat/guest/message", { token: guestToken, message: value });
-        await loadGuestConversation({ notify: false });
+        await loadGuestConversation();
       } else {
         await apiPost("/api/chat/message", { message: value });
-        await loadUserConversation({ notify: false });
+        await loadUserConversation();
       }
       scrollToBottom();
     } catch (err) {
@@ -530,7 +521,7 @@ export default function AssistantChat() {
     "inline-flex h-9 min-w-[3.75rem] items-center justify-center rounded-full border border-indigo-100 bg-white px-3 text-[11px] font-semibold text-indigo-600 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100 disabled:opacity-60";
 
   const ghostActionClass =
-    "inline-flex h-9 min-w-[4.5rem] items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100 disabled:opacity-60";
+    "inline-flex h-9 min-w-[5rem] items-center justify-center rounded-full border border-slate-200 bg-white px-4 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100 disabled:opacity-60";
 
   const suggestionClass =
     "inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100";
@@ -543,6 +534,9 @@ export default function AssistantChat() {
     if (!adminName) return "Waiting for an admin";
     return `Chatting with ${adminName}`;
   };
+
+  const showOfflineNotice =
+    !isAdmin && selectedSession && selectedSession.status === "pending" && onlineAdmins === 0;
 
   const adminIsOnline = adminStatus === STATUS_ONLINE;
   const availabilityLabel = isAdmin
@@ -688,7 +682,7 @@ export default function AssistantChat() {
                     {guestToken && (
                       <button
                         type="button"
-                        onClick={() => loadGuestConversation({ notify: true })}
+                        onClick={() => loadGuestConversation()}
                         className={`w-full ${ghostActionClass} justify-center`}
                       >
                         Resume recent conversation
@@ -716,6 +710,13 @@ export default function AssistantChat() {
             ) : (
               <>
                 <div className="text-xs text-slate-400">{statusSummary()}</div>
+                {showOfflineNotice && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[82%] rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-700 shadow-sm">
+                      All our admins are currently offline. Leave your message here and we'll alert the team as soon as someone comes online.
+                    </div>
+                  </div>
+                )}
                 {shouldShowAssistantIntro && (
                   <div className="flex justify-start">
                     <div className="max-w-[82%] rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-[13px] text-slate-700 shadow-sm">
@@ -802,7 +803,7 @@ export default function AssistantChat() {
                 <button
                   type="button"
                   onClick={closeSelectedConversation}
-                  className={`${ghostActionClass} border-rose-200 text-rose-600 hover:border-rose-300 hover:text-rose-500`}
+                  className="inline-flex h-9 min-w-[4.25rem] items-center justify-center rounded-full border border-rose-200 bg-white px-3 text-[10px] font-semibold text-rose-600 transition hover:border-rose-300 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-100 disabled:opacity-60"
                   aria-label="End chat"
                 >
                   End chat

@@ -10,6 +10,25 @@ const {
   toKey,
 } = require("./utils");
 
+async function candidateIsEditable(periodId) {
+  if (!periodId) return true;
+  const [[period]] = await q(
+    `SELECT id, startTime, endTime, forcedEnded, resultsPublished
+       FROM VotingPeriod
+      WHERE id=?`,
+    [periodId]
+  );
+  if (!period) return true;
+  const now = Date.now();
+  const startTime = new Date(period.startTime).getTime();
+  const endTime = new Date(period.endTime).getTime();
+  if (Number.isNaN(startTime)) return false;
+  if (period.forcedEnded || period.resultsPublished) return false;
+  if (startTime <= now) return false;
+  if (!Number.isNaN(endTime) && endTime <= now) return false;
+  return true;
+}
+
 module.exports = function registerCandidateRoutes(router) {
   // candidate image upload storage
   const storage = multer.diskStorage({
@@ -94,8 +113,12 @@ module.exports = function registerCandidateRoutes(router) {
       if (!scopeInfo.isSuper && toKey(state) !== toKey(scopeInfo.state)) {
         return res.status(403).json({ error: "FORBIDDEN", message: "You can only assign candidates to your state." });
       }
-      if (existing.periodId) {
-        return res.status(409).json({ error: "LOCKED", message: "Candidates assigned to a session cannot be edited. Remove them from the ballot first." });
+      const editable = await candidateIsEditable(existing.periodId);
+      if (!editable) {
+        return res.status(409).json({
+          error: "LOCKED",
+          message: "This candidate is on a ballot that is already live or concluded.",
+        });
       }
       await q(`UPDATE Candidates SET name=?, state=?, lga=?, photoUrl=? WHERE id=?`, [name, state, lga, photoUrl || null, cid]);
       await recordAuditEvent({
@@ -132,8 +155,12 @@ module.exports = function registerCandidateRoutes(router) {
       if (!candidateMatchesScope(scopeInfo, candidate)) {
         return res.status(403).json({ error: "FORBIDDEN", message: "You can only remove candidates for your assigned state." });
       }
-      if (candidate.periodId) {
-        return res.status(409).json({ error: "LOCKED", message: "Candidates assigned to a session cannot be deleted. Remove them from the ballot first." });
+      const editable = await candidateIsEditable(candidate.periodId);
+      if (!editable) {
+        return res.status(409).json({
+          error: "LOCKED",
+          message: "This candidate is on a ballot that is already live or concluded.",
+        });
       }
       await q(`DELETE FROM Candidates WHERE id=?`, [cid]);
       await recordAuditEvent({

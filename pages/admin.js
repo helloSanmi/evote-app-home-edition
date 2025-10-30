@@ -104,6 +104,7 @@ export default function AdminPage() {
   const sessionsPollRef = useRef(null);
 
   const [pendingAction, setPendingAction] = useState(null); // { type, period }
+  const [endReason, setEndReason] = useState("");
   const [tab, setTab] = useState("overview");
   const [resettingUser, setResettingUser] = useState(null);
   const [resetPassword, setResetPassword] = useState("");
@@ -135,6 +136,11 @@ export default function AdminPage() {
   const [editSessionTarget, setEditSessionTarget] = useState(null);
   const [editSessionSaving, setEditSessionSaving] = useState(false);
   const [editSessionForm, setEditSessionForm] = useState(() => defaultEditSessionForm());
+  const [editSessionCandidates, setEditSessionCandidates] = useState([]);
+  const [editSessionCandidatesLoading, setEditSessionCandidatesLoading] = useState(false);
+  const [editSessionCandidate, setEditSessionCandidate] = useState(null);
+  const [editSessionCandidateForm, setEditSessionCandidateForm] = useState({ name: "", state: "", lga: "", photoUrl: "" });
+  const [editSessionCandidateSaving, setEditSessionCandidateSaving] = useState(false);
 
   useEffect(() => {
     if (viewerRole !== "admin") return;
@@ -588,6 +594,25 @@ export default function AdminPage() {
     });
   };
 
+  async function loadSessionCandidatesForEdit(periodId, { silent = false } = {}) {
+    if (!periodId) {
+      setEditSessionCandidates([]);
+      return;
+    }
+    setEditSessionCandidatesLoading(true);
+    try {
+      const rows = await apiGet(`/api/admin/candidates?periodId=${periodId}`);
+      setEditSessionCandidates(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      setEditSessionCandidates([]);
+      if (!silent) {
+        notifyError(err.message || "Failed to load candidates for this session");
+      }
+    } finally {
+      setEditSessionCandidatesLoading(false);
+    }
+  }
+
   const openEditSession = (period) => {
     const scopeValue = (period.scope || "national").toLowerCase();
     setEditSessionTarget(period);
@@ -601,12 +626,103 @@ export default function AdminPage() {
       startTime: toInputDateTime(period.startTime),
       endTime: toInputDateTime(period.endTime),
     });
+    setEditSessionCandidate(null);
+    setEditSessionCandidateForm({ name: "", state: "", lga: "", photoUrl: "" });
+    loadSessionCandidatesForEdit(period.id, { silent: true });
   };
 
+  const refreshEditSessionCandidates = (options = {}) => {
+    if (!editSessionTarget) return;
+    loadSessionCandidatesForEdit(editSessionTarget.id, options);
+  };
+
+  const beginEditSessionCandidate = (candidate) => {
+    if (!candidate) return;
+    setEditSessionCandidate(candidate);
+    setEditSessionCandidateForm({
+      name: candidate.name || "",
+      state: candidate.state || "",
+      lga: candidate.lga || "",
+      photoUrl: candidate.photoUrl || "",
+    });
+  };
+
+  const cancelEditSessionCandidate = () => {
+    if (editSessionCandidateSaving) return;
+    setEditSessionCandidate(null);
+    setEditSessionCandidateForm({ name: "", state: "", lga: "", photoUrl: "" });
+  };
+
+  const handleEditSessionCandidateChange = (field, value) => {
+    setEditSessionCandidateForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleEditSessionCandidatePhoto = async (file) => {
+    if (!file) return;
+    if (!/image\/(png|jpe?g)/i.test(file.type)) {
+      notifyError("Only PNG or JPEG images are allowed");
+      return;
+    }
+    try {
+      const url = await uploadCandidateImage(file);
+      setEditSessionCandidateForm((prev) => ({ ...prev, photoUrl: url }));
+      notifySuccess("Candidate photo updated");
+    } catch (err) {
+      notifyError(err.message);
+    }
+  };
+
+  async function saveEditSessionCandidate() {
+    if (!editSessionTarget || !editSessionCandidate) return;
+    const trimmedName = editSessionCandidateForm.name.trim();
+    if (!trimmedName) {
+      notifyError("Provide the candidate's full name");
+      return;
+    }
+    setEditSessionCandidateSaving(true);
+    try {
+      await apiPut(`/api/admin/candidate/${editSessionCandidate.id}`, {
+        name: trimmedName,
+        state: editSessionCandidate.state,
+        lga: editSessionCandidate.lga,
+        photoUrl: editSessionCandidateForm.photoUrl || null,
+      });
+      notifySuccess("Candidate updated");
+      setEditSessionCandidate(null);
+      setEditSessionCandidateForm({ name: "", state: "", lga: "", photoUrl: "" });
+      await loadSessionCandidatesForEdit(editSessionTarget.id, { silent: true });
+    } catch (err) {
+      notifyError(err.message || "Unable to update candidate");
+    } finally {
+      setEditSessionCandidateSaving(false);
+    }
+  }
+
+  async function removeSessionCandidate(candidate) {
+    if (!editSessionTarget || !candidate) return;
+    setEditSessionCandidateSaving(true);
+    try {
+      await apiDelete(`/api/admin/candidate/${candidate.id}`);
+      notifySuccess(`${candidate.name || "Candidate"} removed from ballot`);
+      if (editSessionCandidate?.id === candidate.id) {
+        setEditSessionCandidate(null);
+        setEditSessionCandidateForm({ name: "", state: "", lga: "", photoUrl: "" });
+      }
+      await loadSessionCandidatesForEdit(editSessionTarget.id, { silent: true });
+    } catch (err) {
+      notifyError(err.message || "Failed to remove candidate");
+    } finally {
+      setEditSessionCandidateSaving(false);
+    }
+  }
+
   const closeEditSession = () => {
-    if (editSessionSaving) return;
+    if (editSessionSaving || editSessionCandidateSaving) return;
     setEditSessionTarget(null);
     setEditSessionForm(defaultEditSessionForm());
+    setEditSessionCandidates([]);
+    setEditSessionCandidate(null);
+    setEditSessionCandidateForm({ name: "", state: "", lga: "", photoUrl: "" });
   };
 
   async function submitEditSession() {
@@ -1008,9 +1124,16 @@ export default function AdminPage() {
     }
   }
 
-  async function endVotingEarly(period) {
+  function requestEarlyEnd(period) {
+    if (!period) return;
+    setEndReason("");
+    setPendingAction({ type: "end", period });
+  }
+
+  async function endVotingEarly(period, reason) {
     try {
-      const resp = await apiPost("/api/admin/end-voting-early", period ? { periodId: period.id } : {});
+      const payload = period ? { periodId: period.id, reason } : { reason };
+      const resp = await apiPost("/api/admin/end-voting-early", payload);
       if (!resp?.success && !resp?.already) throw new Error(resp?.message || "Failed to end voting early");
       await Promise.all([loadSessions(), loadUnpublished()]);
       await refreshLive();
@@ -1425,6 +1548,15 @@ export default function AdminPage() {
         tone: "danger",
       };
     }
+    if (pendingAction.type === "remove-candidate") {
+      const candidateName = pendingAction.candidate?.name || "this candidate";
+      const sessionLabel = pendingAction.period?.title || (pendingAction.period ? `Session #${pendingAction.period.id}` : "this session");
+      return {
+        title: "Remove candidate",
+        message: `Remove ${candidateName} from ${sessionLabel}? This candidate will no longer appear on the ballot.`,
+        tone: "danger",
+      };
+    }
     if (pendingAction.type === "user-disable") {
       return {
         title: "Disable user",
@@ -1460,6 +1592,8 @@ export default function AdminPage() {
         return "End session";
       case "publish":
         return "Publish";
+      case "remove-candidate":
+        return "Remove";
       case "user-disable":
         return "Disable";
       case "user-enable":
@@ -1473,16 +1607,26 @@ export default function AdminPage() {
 
   const handleConfirmAction = async () => {
     if (!pendingAction) return;
+    let trimmedReason = "";
+    if (pendingAction.type === "end") {
+      trimmedReason = endReason.trim();
+      if (trimmedReason.length < 5) {
+        notifyError("Explain why the election is ending early (at least 5 characters).");
+        return;
+      }
+    }
     try {
       if (pendingAction.type === "publish") await publishResults(pendingAction.period);
-      if (pendingAction.type === "end") await endVotingEarly(pendingAction.period);
+      if (pendingAction.type === "end") await endVotingEarly(pendingAction.period, trimmedReason);
       if (pendingAction.type === "delete") await deleteSession(pendingAction.period.id);
       if (pendingAction.type === "cancel") await cancelSession(pendingAction.period);
+      if (pendingAction.type === "remove-candidate") await removeSessionCandidate(pendingAction.candidate);
       if (pendingAction.type === "user-disable") await disableUser(pendingAction.user);
       if (pendingAction.type === "user-enable") await enableUser(pendingAction.user);
       if (pendingAction.type === "user-delete") await deleteUser(pendingAction.user);
     } finally {
       setPendingAction(null);
+      setEndReason("");
     }
   };
 
@@ -2531,7 +2675,7 @@ export default function AdminPage() {
           live={live}
           refresh={refreshLive}
           viewerRole={viewerRole}
-          onEnd={(period) => setPendingAction({ type: "end", period })}
+          onEnd={requestEarlyEnd}
         />
       )}
 
@@ -2900,6 +3044,18 @@ export default function AdminPage() {
         onChange={handleEditSessionChange}
         onClose={closeEditSession}
         onSubmit={submitEditSession}
+        candidates={editSessionCandidates}
+        candidatesLoading={editSessionCandidatesLoading}
+        onRefreshCandidates={() => refreshEditSessionCandidates()}
+        editingCandidate={editSessionCandidate}
+        candidateForm={editSessionCandidateForm}
+        candidateSaving={editSessionCandidateSaving}
+        onBeginCandidateEdit={beginEditSessionCandidate}
+        onCancelCandidateEdit={cancelEditSessionCandidate}
+        onCandidateChange={handleEditSessionCandidateChange}
+        onSaveCandidate={saveEditSessionCandidate}
+        onRemoveCandidate={(candidate) => setPendingAction({ type: "remove-candidate", candidate, period: editSessionTarget })}
+        onUploadCandidatePhoto={handleEditSessionCandidatePhoto}
       />
 
       <RescheduleDialog
@@ -2927,8 +3083,29 @@ export default function AdminPage() {
         cancelLabel="Cancel"
         tone={confirmCopy.tone === "danger" ? "danger" : "indigo"}
         onConfirm={handleConfirmAction}
-        onCancel={() => setPendingAction(null)}
-      />
+        onCancel={() => {
+          setPendingAction(null);
+          setEndReason("");
+        }}
+      >
+        {pendingAction?.type === "end" && (
+          <div className="mt-4 text-left">
+            <label htmlFor="end-reason" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Reason for ending early
+            </label>
+            <textarea
+              id="end-reason"
+              value={endReason}
+              onChange={(e) => setEndReason(e.target.value)}
+              maxLength={500}
+              rows={3}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-inner focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/60"
+              placeholder="Share a short explanation voters will see."
+            />
+            <p className="mt-1 text-[11px] text-slate-400">Voters receive this message with their notification.</p>
+          </div>
+        )}
+      </ConfirmDialog>
       <ResetPasswordDialog
         open={!!resettingUser}
         user={resettingUser}
@@ -2946,7 +3123,28 @@ export default function AdminPage() {
   );
 }
 
-function EditSessionDialog({ open, period, form, states, loading, onChange, onClose, onSubmit }) {
+function EditSessionDialog({
+  open,
+  period,
+  form,
+  states,
+  loading,
+  onChange,
+  onClose,
+  onSubmit,
+  candidates = [],
+  candidatesLoading = false,
+  onRefreshCandidates,
+  editingCandidate,
+  candidateForm = { name: "", state: "", lga: "", photoUrl: "" },
+  candidateSaving = false,
+  onBeginCandidateEdit,
+  onCancelCandidateEdit,
+  onCandidateChange,
+  onSaveCandidate,
+  onRemoveCandidate,
+  onUploadCandidatePhoto,
+}) {
   if (!open || !period) return null;
   const scopeOptions = [
     { value: "national", label: "National" },
@@ -2964,6 +3162,18 @@ function EditSessionDialog({ open, period, form, states, loading, onChange, onCl
   );
   const monthLabel = !Number.isNaN(startPreview.getTime()) ? startPreview.toLocaleString("default", { month: "short" }) : "";
   const dayLabel = !Number.isNaN(startPreview.getTime()) ? startPreview.getDate() : "";
+  const candidateList = Array.isArray(candidates) ? candidates : [];
+  const editingId = editingCandidate?.id;
+  const handleCandidateRefresh = () => {
+    onRefreshCandidates?.();
+  };
+  const handleCandidatePhotoInput = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) {
+      onUploadCandidatePhoto?.(file);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[225] flex items-center justify-center bg-slate-900/60 px-4">
@@ -3102,6 +3312,133 @@ function EditSessionDialog({ open, period, form, states, loading, onChange, onCl
                   minDate={form.startTime ? new Date(form.startTime) : undefined}
                 />
               </div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Ballot candidates</p>
+                  <p className="text-xs text-slate-500">Edit candidate details or remove them before voting starts.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCandidateRefresh}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
+                  disabled={candidatesLoading || candidateSaving || loading}
+                >
+                  Refresh
+                </button>
+              </div>
+              {candidatesLoading ? (
+                <p className="mt-3 text-xs text-slate-500">Loading candidates…</p>
+              ) : candidateList.length === 0 ? (
+                <p className="mt-3 text-xs text-slate-500">No candidates attached yet.</p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {editingCandidate && (
+                    <div className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <img
+                          src={candidateForm.photoUrl || editingCandidate.photoUrl || "/placeholder.png"}
+                          alt={candidateForm.name || editingCandidate.name || "Candidate"}
+                          className="h-14 w-14 rounded-full object-cover ring-1 ring-slate-200/70"
+                        />
+                        <div className="space-y-3 flex-1">
+                          <div>
+                            <label className="form-label" htmlFor="edit-candidate-name">Full name</label>
+                            <input
+                              id="edit-candidate-name"
+                              className="form-control"
+                              value={candidateForm.name}
+                              onChange={(e) => onCandidateChange?.("name", e.target.value)}
+                              placeholder="Full name"
+                              disabled={candidateSaving}
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-indigo-600 hover:text-indigo-700">
+                              <span>Change photo</span>
+                              <input
+                                type="file"
+                                accept="image/png,image/jpeg"
+                                className="hidden"
+                                onChange={handleCandidatePhotoInput}
+                                disabled={candidateSaving}
+                              />
+                            </label>
+                            <span className="text-[11px] text-slate-500">
+                              {editingCandidate.state || "N/A"}
+                              {editingCandidate.lga ? ` • ${editingCandidate.lga}` : ""}
+                            </span>
+                          </div>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+                            <button
+                              type="button"
+                              onClick={() => onSaveCandidate?.()}
+                              className="btn-primary w-full sm:w-auto"
+                              disabled={candidateSaving}
+                            >
+                              {candidateSaving ? "Saving…" : "Save changes"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onCancelCandidateEdit?.()}
+                              className="btn-secondary w-full sm:w-auto"
+                              disabled={candidateSaving}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {candidateList.map((candidate) => {
+                    const isEditing = editingId === candidate.id;
+                    if (editingCandidate && isEditing) {
+                      return null;
+                    }
+                    return (
+                      <div
+                        key={candidate.id}
+                        className={`flex flex-col gap-3 rounded-xl border ${isEditing ? "border-indigo-300 bg-white shadow-sm" : "border-slate-200 bg-white/90"} p-4 sm:flex-row sm:items-center sm:justify-between`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={candidate.photoUrl || "/placeholder.png"}
+                            alt={candidate.name}
+                            className="h-12 w-12 rounded-full object-cover ring-1 ring-slate-200/60"
+                          />
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{candidate.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {candidate.state || "N/A"}
+                              {candidate.lga ? ` • ${candidate.lga}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onBeginCandidateEdit?.(candidate)}
+                            className="rounded-full border border-indigo-200 bg-white px-3 py-1 text-[11px] font-semibold text-indigo-600 transition hover:border-indigo-300 hover:bg-indigo-50"
+                            disabled={candidateSaving || loading}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveCandidate?.(candidate)}
+                            className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-100"
+                            disabled={candidateSaving || loading}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex flex-col gap-4">
@@ -3245,6 +3582,40 @@ function StatPill({ label, value, tone }) {
 
 function LivePanel({ live, refresh, viewerRole, onEnd }) {
   const canControl = ["admin", "super-admin"].includes((viewerRole || "").toLowerCase());
+  const [scopeFilter, setScopeFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const normalizedLive = Array.isArray(live) ? live : [];
+  const filteredLive = useMemo(() => {
+    const scopeKey = scopeFilter.toLowerCase();
+    const q = query.trim().toLowerCase();
+    return normalizedLive.filter(({ period, candidates = [] }) => {
+      if (!period) return false;
+      const periodScope = String(period.scope || "national").toLowerCase();
+      if (scopeKey !== "all" && periodScope !== scopeKey) return false;
+      if (!q) return true;
+      const haystack = [
+        period.title,
+        period.scopeState,
+        period.scopeLGA,
+        period.id,
+        candidates.map((c) => c.name).join(" "),
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(q);
+    });
+  }, [normalizedLive, scopeFilter, query]);
+  const hasActiveFilters = scopeFilter !== "all" || query.trim() !== "";
+  const resetFilters = () => {
+    setScopeFilter("all");
+    setQuery("");
+  };
+  const displayList = filteredLive;
+  const hasAnyLive = normalizedLive.length > 0;
+  const emptyMessage = hasAnyLive
+    ? "No live sessions match your filters right now."
+    : "No votes coming in right now. Active sessions will appear here automatically.";
+
   return (
     <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 md:p-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3256,42 +3627,93 @@ function LivePanel({ live, refresh, viewerRole, onEnd }) {
           Refresh now
         </button>
       </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <select
+            value={scopeFilter}
+            onChange={(e) => setScopeFilter(e.target.value)}
+            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40 sm:w-auto"
+          >
+            <option value="all">All scopes</option>
+            <option value="national">National</option>
+            <option value="state">State</option>
+            <option value="local">Local</option>
+          </select>
+          <div className="relative flex-1">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search title, location, or candidate"
+              className="w-full rounded-full border border-slate-200 bg-white px-4 py-2 pr-9 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="absolute inset-y-0 right-2 flex h-full items-center justify-center rounded-full px-2 text-slate-400 transition hover:text-slate-600"
+                aria-label="Clear live search"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </div>
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="self-start rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-500 transition hover:bg-slate-100"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
       <div className="mt-4 space-y-4">
-        {live.length === 0 ? (
+        {displayList.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
-            No votes coming in right now. Active sessions will appear here automatically.
+            {emptyMessage}
           </div>
         ) : (
-          live.map(({ period, candidates }) => (
-            <div key={period.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
-                  <div className="text-xs text-slate-500">Ends {new Date(period.endTime).toLocaleString()}</div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {canControl && (
-                    <button
-                      type="button"
-                      className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-100"
-                      onClick={() => onEnd?.(period)}
-                    >
-                      End now
-                    </button>
-                  )}
-                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase text-emerald-600">Live</span>
-                </div>
-              </div>
-              <div className="mt-3 space-y-2">
-                {candidates.map((candidate) => (
-                  <div key={candidate.id} className="flex flex-col gap-1 rounded-xl border border-slate-100 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-sm font-medium text-slate-900">{candidate.name}</span>
-                    <span className="text-sm font-semibold text-slate-900">{candidate.votes} votes</span>
+          displayList.map(({ period, candidates }) => {
+            const scopeRaw = String(period.scope || "");
+            const scopeLower = scopeRaw.toLowerCase();
+            return (
+              <div key={period.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{period.title || `Session #${period.id}`}</div>
+                    <div className="text-xs text-slate-500">
+                      Ends {new Date(period.endTime).toLocaleString()}
+                      {scopeRaw ? ` • ${scopeRaw.toUpperCase()}` : ""}
+                      {scopeLower !== "national" && period.scopeState ? ` • ${period.scopeState}` : ""}
+                      {scopeLower === "local" && period.scopeLGA ? ` • ${period.scopeLGA}` : ""}
+                    </div>
                   </div>
-                ))}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {canControl && (
+                      <button
+                        type="button"
+                        className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-100"
+                        onClick={() => onEnd?.(period)}
+                      >
+                        End now
+                      </button>
+                    )}
+                    <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase text-emerald-600">Live</span>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {candidates.map((candidate) => (
+                    <div key={candidate.id} className="flex flex-col gap-1 rounded-xl border border-slate-100 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-sm font-medium text-slate-900">{candidate.name}</span>
+                      <span className="text-sm font-semibold text-slate-900">{candidate.votes} votes</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>

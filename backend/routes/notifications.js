@@ -1,11 +1,43 @@
 const express = require("express");
 const router = express.Router();
-const { q } = require("../db");
+const { q, getDbPool } = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { mapRow } = require("../utils/notifications");
+const { checkEligibility } = require("../utils/eligibility");
 
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 40;
+
+function normalize(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function matchesNotificationScope(notification, user) {
+  if (!notification) return false;
+  const scope = normalize(notification.scope);
+  if (!scope || scope === "global" || scope === "national") return true;
+  if (!user) return false;
+
+  const userState = normalize(user.state);
+  const userLga = normalize(user.residenceLGA);
+
+  if (scope === "state") {
+    const targetState = normalize(notification.scopeState);
+    return Boolean(userState) && (!targetState || userState === targetState);
+  }
+
+  if (scope === "local") {
+    const targetState = normalize(notification.scopeState);
+    const targetLga = normalize(notification.scopeLGA);
+    const stateMatches = !targetState || (userState && userState === targetState);
+    const lgaMatches = !targetLga || (userLga && userLga === targetLga);
+    return stateMatches && lgaMatches;
+  }
+
+  return true;
+}
 
 router.get("/", requireAuth, async (req, res) => {
   try {
@@ -40,8 +72,77 @@ router.get("/", requireAuth, async (req, res) => {
       LIMIT ${limit}
     `;
     const [rows] = await q(sql, [req.user.id]);
-    const payload = (rows || []).map((row) => mapRow(row));
-    res.json(payload);
+    const notifications = (rows || []).map((row) => mapRow(row));
+
+    if (notifications.length === 0) {
+      return res.json([]);
+    }
+
+    const isUserAudience = audience === "user";
+    if (!isUserAudience) {
+      return res.json(notifications);
+    }
+
+    const [[userProfile]] = await q(
+      `SELECT id, state, residenceLGA, dateOfBirth, eligibilityStatus, email, nationalId
+         FROM Users
+        WHERE id=?
+        LIMIT 1`,
+      [req.user.id]
+    );
+
+    if (!userProfile) {
+      return res.json([]);
+    }
+
+    const eligibilityStatus = normalize(userProfile.eligibilityStatus);
+    if (eligibilityStatus === "disabled") {
+      return res.json([]);
+    }
+
+    const periodIds = Array.from(
+      new Set(
+        notifications
+          .map((item) => item.periodId)
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )
+    );
+
+    const periodMap = new Map();
+    if (periodIds.length > 0) {
+      const placeholders = periodIds.map(() => "?").join(",");
+      const [periodRows] = await q(
+        `SELECT id, title, startTime, endTime, minAge, scope, scopeState, scopeLGA, requireWhitelist
+           FROM VotingPeriod
+          WHERE id IN (${placeholders})`,
+        periodIds
+      );
+      (periodRows || []).forEach((period) => {
+        periodMap.set(period.id, period);
+      });
+    }
+
+    const pool = getDbPool();
+    const eligibilityCache = new Map();
+    const eligibleNotifications = [];
+
+    for (const notification of notifications) {
+      if (notification.periodId && periodMap.has(notification.periodId)) {
+        if (!eligibilityCache.has(notification.periodId)) {
+          const period = periodMap.get(notification.periodId);
+          const result = await checkEligibility(pool, userProfile, period);
+          eligibilityCache.set(notification.periodId, Boolean(result?.eligible));
+        }
+        if (!eligibilityCache.get(notification.periodId)) {
+          continue;
+        }
+      } else if (!matchesNotificationScope(notification, userProfile)) {
+        continue;
+      }
+      eligibleNotifications.push(notification);
+    }
+
+    res.json(eligibleNotifications);
   } catch (err) {
     console.error("notifications/list:", err);
     res.status(500).json({ error: "SERVER", message: "Could not load notifications" });

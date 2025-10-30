@@ -122,7 +122,7 @@ export default function NotificationBell() {
               <button
                 type="button"
                 onClick={refresh}
-                className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-100"
+                className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500 transition hover:bg-slate-100"
               >
                 Refresh
               </button>
@@ -130,7 +130,7 @@ export default function NotificationBell() {
                 <button
                   type="button"
                   onClick={clearAll}
-                  className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-100"
+                  className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-600 transition hover:bg-rose-100"
                 >
                   Clear all
                 </button>

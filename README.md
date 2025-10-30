@@ -10,6 +10,66 @@ Web-based election platform with a Next.js front end and an Express/MySQL backen
 - Automated retention sweep (inactive users, chat history, orphaned uploads).
 - MySQL schema bootstrap, migrations, and helper scripts for provisioning.
 
+## Quick Start (Local)
+
+1. **Clone & install**
+   ```bash
+   git clone https://github.com/your-org/voting-app.git
+   cd voting-app
+   npm install
+   cd backend && npm install && cd ..
+   ```
+
+2. **Spin up MySQL** (skip if you already have an instance). The snippet below launches MySQL 8 with a matching database/user:
+   ```bash
+   docker run --name voting-mysql -e MYSQL_ROOT_PASSWORD=rootpw -e MYSQL_DATABASE=votingapp \
+     -e MYSQL_USER=voting -e MYSQL_PASSWORD=votingpw -p 3306:3306 -d mysql:8
+   ```
+
+3. **Create environment files** (copy from your own templates or create new ones):
+   ```bash
+   touch .env.local backend/.env
+   ```
+   Minimum values:
+   ```env
+   # .env.local
+   NEXT_PUBLIC_API_URL=http://localhost:5050
+
+   # backend/.env
+   PORT=5050
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_USER=voting
+   DB_PASSWORD=votingpw
+   DB_NAME=votingapp
+   JWT_SECRET=change-me
+   CORS_ORIGINS=http://localhost:3000
+   ```
+
+4. **Bootstrap the schema**
+   ```bash
+   cd backend
+   npm run migrate
+   ```
+
+5. **Start both services** (two terminals):
+   ```bash
+   # Terminal 1
+   cd backend
+   npm run dev    # Express + Socket.IO on http://localhost:5050
+
+   # Terminal 2 (repo root)
+   npm run dev    # Next.js on http://localhost:3000
+   ```
+
+6. **Seed an admin** (optional, for first login):
+   ```bash
+   cd backend
+   node DBRelated/create-admin.js
+   ```
+
+Once both servers are running, visit `http://localhost:3000`, log in with the seeded admin, and begin configuring sessions/candidates.
+
 ## Tech Stack
 
 - Frontend: Next.js 15, React 18, Tailwind CSS 4, React Toastify.

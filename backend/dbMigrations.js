@@ -365,6 +365,19 @@ async function ensurePasswordResetTable() {
   `);
 }
 
+async function ensureForcedEndReasonColumn() {
+  const [[exists]] = await q(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME='VotingPeriod'
+        AND COLUMN_NAME='forcedEndReason'`
+  );
+  if (!exists) {
+    await q(`ALTER TABLE VotingPeriod ADD COLUMN forcedEndReason VARCHAR(500) NULL AFTER forcedEnded`);
+  }
+}
+
 async function ensureVotingPeriodNotificationColumns() {
   const columns = [
     { name: "notifyScheduledAt", sql: "ALTER TABLE VotingPeriod ADD COLUMN notifyScheduledAt DATETIME NULL AFTER forcedEnded" },
@@ -477,6 +490,7 @@ async function ensureSchema() {
   await ensureAuditLogTable();
   await ensureNotificationTables();
   await ensurePasswordResetTable();
+  await ensureForcedEndReasonColumn();
   await ensureVotingPeriodNotificationColumns();
   await ensureCookieConsentTable();
   await ensureProfileChangeRequestTable();
