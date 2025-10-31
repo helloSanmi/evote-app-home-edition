@@ -278,18 +278,33 @@ async function ensureNotificationTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
-  const [[audienceColumn]] = await q(
-    `SELECT COLUMN_NAME
-       FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = 'NotificationEvent'
-        AND COLUMN_NAME = 'audience'`
-  );
-  if (!audienceColumn) {
-    await q(`ALTER TABLE NotificationEvent ADD COLUMN audience VARCHAR(20) NOT NULL DEFAULT 'user' AFTER message`);
+  const columnsToEnsure = [
+    { name: "audience", sql: "ALTER TABLE NotificationEvent ADD COLUMN audience VARCHAR(20) NOT NULL DEFAULT 'user' AFTER message" },
+    { name: "scopeState", sql: "ALTER TABLE NotificationEvent ADD COLUMN scopeState VARCHAR(120) NULL AFTER scope" },
+    { name: "scopeLGA", sql: "ALTER TABLE NotificationEvent ADD COLUMN scopeLGA VARCHAR(120) NULL AFTER scopeState" },
+    { name: "periodId", sql: "ALTER TABLE NotificationEvent ADD COLUMN periodId INT NULL AFTER scopeLGA" },
+    { name: "metadata", sql: "ALTER TABLE NotificationEvent ADD COLUMN metadata JSON NULL AFTER periodId" },
+    { name: "createdAt", sql: "ALTER TABLE NotificationEvent ADD COLUMN createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER metadata" },
+  ];
+
+  for (const column of columnsToEnsure) {
+    const [[exists]] = await q(
+      `SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'NotificationEvent'
+          AND COLUMN_NAME = ?`,
+      [column.name]
+    );
+    if (!exists) {
+      await q(column.sql);
+    }
   }
 
   await ensureIndex("NotificationEvent", "idx_notification_audience", "ALTER TABLE NotificationEvent ADD KEY idx_notification_audience (audience)");
+  await ensureIndex("NotificationEvent", "idx_notification_scope", "ALTER TABLE NotificationEvent ADD KEY idx_notification_scope (scope, scopeState, scopeLGA)");
+  await ensureIndex("NotificationEvent", "idx_notification_period", "ALTER TABLE NotificationEvent ADD KEY idx_notification_period (periodId)");
+  await ensureIndex("NotificationEvent", "idx_notification_created", "ALTER TABLE NotificationEvent ADD KEY idx_notification_created (createdAt)");
 
   await q(`
     CREATE TABLE IF NOT EXISTS NotificationReceipt (
@@ -439,6 +454,52 @@ async function ensureProfileChangeRequestTable() {
   `);
 }
 
+async function ensureVerificationTables() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS VerificationRequest (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      status ENUM('pending','approved','rejected','cancelled') NOT NULL DEFAULT 'pending',
+      documentType VARCHAR(60) NOT NULL,
+      notes TEXT NULL,
+      adminNotes TEXT NULL,
+      metadata JSON NULL,
+      submittedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      reviewedAt DATETIME NULL,
+      reviewedBy INT NULL,
+      CONSTRAINT fk_verification_user FOREIGN KEY (userId) REFERENCES Users(id) ON DELETE CASCADE,
+      CONSTRAINT fk_verification_admin FOREIGN KEY (reviewedBy) REFERENCES Users(id) ON DELETE SET NULL,
+      KEY idx_verification_user (userId, status, submittedAt),
+      KEY idx_verification_status (status, submittedAt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await q(`
+    CREATE TABLE IF NOT EXISTS VerificationAttachment (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      requestId BIGINT NOT NULL,
+      fileKey VARCHAR(255) NOT NULL,
+      fileName VARCHAR(255) NOT NULL,
+      contentType VARCHAR(120) NULL,
+      size BIGINT NOT NULL,
+      uploadedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_verification_attachment_request FOREIGN KEY (requestId) REFERENCES VerificationRequest(id) ON DELETE CASCADE,
+      KEY idx_verification_attachment_request (requestId)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  const [[statusColumn]] = await q(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME='Users'
+        AND COLUMN_NAME='verificationStatus'`
+  );
+  if (!statusColumn) {
+    await q(`ALTER TABLE Users ADD COLUMN verificationStatus ENUM('none','pending','verified') NOT NULL DEFAULT 'none' AFTER eligibilityStatus`);
+  }
+}
+
 async function alignRolesWithFlags() {
   const adminUsernames = envSet(process.env.ADMIN_USERNAMES);
   const adminEmails = envSet(process.env.ADMIN_EMAILS);
@@ -494,6 +555,7 @@ async function ensureSchema() {
   await ensureVotingPeriodNotificationColumns();
   await ensureCookieConsentTable();
   await ensureProfileChangeRequestTable();
+  await ensureVerificationTables();
 }
 
 module.exports = { ensureSchema };

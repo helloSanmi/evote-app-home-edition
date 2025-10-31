@@ -35,6 +35,7 @@ export default function Register() {
   const [voterCardNumber, setVoterCardNumber] = useState("");
   const [residenceAddress, setResidenceAddress] = useState("");
   const [busy, setBusy] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   const formatPvcInput = (value) => {
     const raw = (value || "").toUpperCase();
@@ -98,6 +99,17 @@ export default function Register() {
     } else {
       localStorage.removeItem("needsEmailVerification");
     }
+    const verificationStatus = (data.verificationStatus || "").toLowerCase();
+    if (verificationStatus) {
+      localStorage.setItem("verificationStatus", verificationStatus);
+    } else {
+      localStorage.removeItem("verificationStatus");
+    }
+    if (data.requiresVerification || (verificationStatus && verificationStatus !== "verified")) {
+      localStorage.setItem("needsVerification", "true");
+    } else {
+      localStorage.removeItem("needsVerification");
+    }
     localStorage.setItem("profilePhoto", data.profilePhoto || "/placeholder.png");
     localStorage.setItem("role", (data.role || "user").toLowerCase());
     localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
@@ -112,11 +124,17 @@ export default function Register() {
     }
     reidentifySocket();
     setTimeout(() => {
+      const nextRole = (data.role || "user").toLowerCase();
+      const verificationStatus = (data.verificationStatus || "").toLowerCase();
+      const needsVerification = data.requiresVerification || (verificationStatus && verificationStatus !== "verified");
       if (data.requiresProfileCompletion) {
         router.replace("/complete-profile");
         return;
       }
-      const nextRole = (data.role || "user").toLowerCase();
+      if (needsVerification && nextRole === "user") {
+        router.replace("/verification-required");
+        return;
+      }
       router.replace(nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/");
     }, 400);
   };
@@ -135,6 +153,43 @@ export default function Register() {
     }
     return age >= 18;
   };
+
+  const requiredFieldsFilled = useMemo(
+    () =>
+      Boolean(
+        firstName.trim() &&
+        lastName.trim() &&
+        username.trim() &&
+        email.trim() &&
+        password &&
+        confirmPassword &&
+        dateOfBirth &&
+        gender &&
+        nationalId.trim() &&
+        voterCardNumber.trim() &&
+        residenceAddress.trim() &&
+        state &&
+        residenceLGA
+      ),
+    [
+      firstName,
+      lastName,
+      username,
+      email,
+      password,
+      confirmPassword,
+      dateOfBirth,
+      gender,
+      nationalId,
+      voterCardNumber,
+      residenceAddress,
+      state,
+      residenceLGA,
+    ]
+  );
+
+  const passwordsMatch = password && confirmPassword && password === confirmPassword;
+  const canSubmit = requiredFieldsFilled && passwordsMatch && acceptedTerms;
 
   async function submit(e) {
     e.preventDefault();
@@ -212,6 +267,10 @@ export default function Register() {
       notifyError("Phone number can only include digits, spaces, +, -, and parentheses.");
       return;
     }
+    if (!acceptedTerms) {
+      notifyError("You must accept the Terms & Conditions before creating an account.");
+      return;
+    }
     const combinedFullName = `${first} ${last}`.trim();
     setBusy(true);
     try {
@@ -251,9 +310,34 @@ export default function Register() {
     }
   }
 
-  const showMismatch = confirmTouched && password !== confirmPassword;
+  const showMismatch = confirmTouched && !passwordsMatch;
   const passwordFieldType = showPassword ? "text" : "password";
   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
+
+  const EyeIcon = ({ open = false }) => (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      className="h-5 w-5"
+    >
+      <path
+        d="M2.25 12c1.58-3.15 5.07-6 9.75-6s8.17 2.85 9.75 6c-1.58 3.15-5.07 6-9.75 6s-8.17-2.85-9.75-6Z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="2.8" strokeLinecap="round" strokeLinejoin="round" />
+      {!open && (
+        <path
+          d="M4 4l16 16"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
 
   const handleGoogleCredential = async (credential) => {
     if (!credential) return;
@@ -371,9 +455,11 @@ export default function Register() {
                       <button
                         type="button"
                         onClick={togglePasswordVisibility}
-                        className="absolute inset-y-0 right-1 flex items-center rounded-md px-2 text-xs font-medium text-indigo-500 transition hover:text-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                        className="absolute inset-y-0 right-3 flex items-center text-slate-500 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        title={showPassword ? "Hide password" : "Show password"}
                       >
-                        {showPassword ? "Hide" : "Show"}
+                        <EyeIcon open={showPassword} />
                       </button>
                     </div>
                   </div>
@@ -397,9 +483,11 @@ export default function Register() {
                       <button
                         type="button"
                         onClick={togglePasswordVisibility}
-                        className="absolute inset-y-0 right-1 flex items-center rounded-md px-2 text-xs font-medium text-indigo-500 transition hover:text-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                        className="absolute inset-y-0 right-3 flex items-center text-slate-500 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        title={showPassword ? "Hide password" : "Show password"}
                       >
-                        {showPassword ? "Hide" : "Show"}
+                        <EyeIcon open={showPassword} />
                       </button>
                     </div>
                     {showMismatch && <p className="text-xs text-rose-500">Passwords must match before you continue.</p>}
@@ -534,13 +622,32 @@ export default function Register() {
                     </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={busy || showMismatch}
-                    className="btn-primary w-full justify-center text-base disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busy ? "Creating your account…" : "Create account"}
-                  </button>
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3 text-sm text-slate-600">
+                      <input
+                        id="acceptTerms"
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-200"
+                        checked={acceptedTerms}
+                        onChange={(e) => setAcceptedTerms(e.target.checked)}
+                      />
+                      <label htmlFor="acceptTerms" className="cursor-pointer select-none">
+                        I agree to the{" "}
+                        <Link href="/terms" className="font-semibold text-indigo-600 underline-offset-4 hover:underline">
+                          Terms &amp; Conditions
+                        </Link>{" "}
+                        and confirm that the information provided is accurate.
+                      </label>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={!canSubmit || busy}
+                      className="btn-primary w-full justify-center text-sm disabled:cursor-not-allowed"
+                    >
+                      {busy ? "Creating your account…" : "Create account"}
+                    </button>
+                  </div>
                 </form>
 
                 <div className="mt-6">

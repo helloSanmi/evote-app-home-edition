@@ -9,5 +9,6 @@ require("./profileChanges")(router);
 require("./analytics")(router);
 require("./logs")(router);
 require("./files")(router);
+require("./verification")(router);
 
 module.exports = router;

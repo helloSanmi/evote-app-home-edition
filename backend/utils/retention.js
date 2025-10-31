@@ -108,6 +108,18 @@ async function hardDeleteUser(user, { reason = "retention" } = {}) {
       await removeFromObjectStorage(relative);
       safeUnlink(localPath);
     }
+    const [verificationAttachments] = await q(
+      `SELECT fileKey FROM VerificationAttachment WHERE requestId IN (
+          SELECT id FROM VerificationRequest WHERE userId=?
+        )`,
+      [userId]
+    );
+    for (const row of verificationAttachments || []) {
+      if (!row?.fileKey) continue;
+      await removeFromObjectStorage(row.fileKey);
+      const localPath = path.join(uploadRoot, row.fileKey);
+      safeUnlink(localPath);
+    }
   } catch (err) {
     console.warn("[retention] profile photo cleanup failed:", err?.message || err);
   }

@@ -32,13 +32,18 @@ router.post("/consent", async (req, res) => {
     const analytics = normalizeBool(req.body?.analytics);
     const marketing = normalizeBool(req.body?.marketing);
     let visitorId = normalizeVisitorId(req.body?.visitorId);
-    const userId = req.user?.id || null;
+    let userId = req.user?.id || null;
 
     if (!visitorId) {
       visitorId = generateVisitorId();
     }
 
-    await q(
+    if (userId) {
+      const [[exists]] = await q(`SELECT id FROM Users WHERE id=? LIMIT 1`, [userId]);
+      if (!exists) userId = null;
+    }
+
+    const persist = async (uid) => q(
       `INSERT INTO CookieConsent (userId, visitorId, analytics, marketing)
        VALUES (?,?,?,?)
        ON DUPLICATE KEY UPDATE
@@ -46,8 +51,19 @@ router.post("/consent", async (req, res) => {
          analytics = VALUES(analytics),
          marketing = VALUES(marketing),
          updatedAt = CURRENT_TIMESTAMP`,
-      [userId, visitorId, analytics ? 1 : 0, marketing ? 1 : 0]
+      [uid, visitorId, analytics ? 1 : 0, marketing ? 1 : 0]
     );
+
+    try {
+      await persist(userId);
+    } catch (err) {
+      if (err?.code === "ER_NO_REFERENCED_ROW_2") {
+        userId = null;
+        await persist(userId);
+      } else {
+        throw err;
+      }
+    }
 
     const [[record]] = await q(
       `SELECT cc.id,
@@ -220,4 +236,3 @@ router.get(
 );
 
 module.exports = router;
-

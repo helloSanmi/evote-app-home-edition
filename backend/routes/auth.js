@@ -25,7 +25,11 @@ const {
 } = require("../utils/identity");
 
 const router = express.Router();
-const sign = (u) => jwt.sign({ id: u.id, username: u.username, email: u.email, role: u.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+const sign = (u) => jwt.sign(
+  { id: u.id, username: u.username, email: u.email, role: u.role },
+  process.env.JWT_SECRET,
+  { expiresIn: process.env.JWT_EXPIRES_IN || "1h" }
+);
 
 const normalizeRole = (user) => {
   const envUsernames = new Set((process.env.ADMIN_USERNAMES || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
@@ -291,7 +295,7 @@ router.post("/register", async (req, res) => {
     }
 
     const [[createdUser]] = await q(
-      `SELECT id, username, email, fullName, firstName, lastName, role, isAdmin, eligibilityStatus, profilePhoto, emailVerifiedAt, activationToken
+      `SELECT id, username, email, fullName, firstName, lastName, role, isAdmin, eligibilityStatus, verificationStatus, profilePhoto, emailVerifiedAt, activationToken
          FROM Users
         WHERE id=?`,
       [userId]
@@ -323,6 +327,8 @@ router.post("/register", async (req, res) => {
     const isAdmin = privileged;
     const emailVerified = Boolean(createdUser?.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED;
     const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !privileged && !emailVerified;
+    const verificationStatus = (createdUser?.verificationStatus || "none").toLowerCase();
+    const requiresVerification = !privileged && verificationStatus !== "verified";
     const completionRequired = requiresProfileCompletion(userForToken);
     const requiresPasswordReset = Boolean(userForToken.mustResetPassword);
 
@@ -339,11 +345,13 @@ router.post("/register", async (req, res) => {
       isAdmin,
       profilePhoto: createdUser.profilePhoto || null,
       eligibilityStatus: createdUser.eligibilityStatus || null,
+      verificationStatus,
       requiresProfileCompletion: completionRequired,
       emailVerified,
       requiresEmailVerification,
       activationPending: requiresEmailVerification,
       requiresPasswordReset,
+      requiresVerification,
     });
   } catch (e) {
     if (e?.code === "ER_DUP_ENTRY") {
@@ -540,6 +548,8 @@ router.post("/login", async (req, res) => {
     });
     const completionRequired = requiresProfileCompletion(userForToken);
     const requiresPasswordReset = Boolean(u.mustResetPassword);
+    const verificationStatus = (u.verificationStatus || "none").toLowerCase();
+    const requiresVerification = !isAdmin && verificationStatus !== "verified";
     res.json({
       token,
       userId: u.id,
@@ -552,10 +562,12 @@ router.post("/login", async (req, res) => {
       isAdmin,
       profilePhoto: u.profilePhoto || null,
       eligibilityStatus: u.eligibilityStatus || null,
+      verificationStatus,
       requiresProfileCompletion: completionRequired,
       emailVerified,
       requiresEmailVerification,
       requiresPasswordReset,
+      requiresVerification,
     });
   } catch (err) {
     console.error("auth/login:", err);
@@ -706,6 +718,8 @@ router.post("/google", async (req, res) => {
     });
     const completionRequired = requiresProfileCompletion(user);
     const requiresPasswordReset = Boolean(user.mustResetPassword);
+    const verificationStatus = (user.verificationStatus || "none").toLowerCase();
+    const requiresVerification = !isAdmin && verificationStatus !== "verified";
     res.json({
       token,
       userId: user.id,
@@ -718,10 +732,12 @@ router.post("/google", async (req, res) => {
       isAdmin,
       profilePhoto: user.profilePhoto || null,
       eligibilityStatus: user.eligibilityStatus || null,
+      verificationStatus,
       requiresProfileCompletion: completionRequired,
       emailVerified: Boolean(user.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED,
       requiresEmailVerification: false,
       requiresPasswordReset,
+      requiresVerification,
     });
   } catch (err) {
     console.error("auth/google:", err);
@@ -880,6 +896,8 @@ router.post("/microsoft", async (req, res) => {
     });
     const completionRequired = requiresProfileCompletion(user);
     const requiresPasswordReset = Boolean(user.mustResetPassword);
+    const verificationStatus = (user.verificationStatus || "none").toLowerCase();
+    const requiresVerification = !isAdmin && verificationStatus !== "verified";
     res.json({
       token,
       userId: user.id,
@@ -896,6 +914,8 @@ router.post("/microsoft", async (req, res) => {
       emailVerified: Boolean(user.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED,
       requiresEmailVerification: false,
       requiresPasswordReset,
+      verificationStatus,
+      requiresVerification,
     });
   } catch (err) {
     if (err?.message === "MICROSOFT_NOT_CONFIGURED") {
@@ -944,6 +964,8 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
     const emailVerified = Boolean(u.emailVerifiedAt) || !EMAIL_VERIFICATION_ENABLED;
     const requiresEmailVerification = EMAIL_VERIFICATION_ENABLED && !isAdmin && !emailVerified && Boolean(u.activationToken);
     const requiresPasswordReset = Boolean(normalizedUser.mustResetPassword);
+    const verificationStatus = (u.verificationStatus || "none").toLowerCase();
+    const requiresVerification = !isAdmin && verificationStatus !== "verified";
     res.json({
       token,
       role,
@@ -957,6 +979,8 @@ router.post("/refresh-role", requireAuth, async (req, res) => {
       emailVerified,
       requiresEmailVerification,
       requiresPasswordReset,
+      verificationStatus,
+      requiresVerification,
     });
   } catch (err) {
     console.error("auth/refresh-role:", err);

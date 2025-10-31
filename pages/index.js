@@ -207,10 +207,10 @@ export default function Home() {
                   {activeSlide.description}
                 </p>
                 <div className="flex flex-wrap gap-4">
-                  <Link href="/register" className="btn-primary text-base shadow-lg shadow-indigo-200/60 hover:shadow-indigo-300/60">
+                  <Link href="/register" className="btn-primary text-sm shadow-md shadow-indigo-200/60 hover:shadow-indigo-300/60">
                     Launch your election
                   </Link>
-                  <Link href="/login" className="inline-flex items-center rounded-full border border-slate-300 bg-white px-6 py-2.5 text-base font-semibold text-slate-700 transition hover:border-slate-400 hover:text-indigo-600">
+                  <Link href="/login" className="inline-flex items-center rounded-full border border-slate-300 bg-white px-6 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-indigo-600">
                     Sign in
                   </Link>
                 </div>
@@ -491,7 +491,7 @@ export default function Home() {
                   <div className="text-xs text-slate-500">
                     {new Date(active.startTime).toLocaleString()} to {new Date(active.endTime).toLocaleString()}
                   </div>
-                  <Link href="/vote" className="btn-primary w-full justify-center text-base">
+                  <Link href="/vote" className="btn-primary w-full justify-center text-sm">
                     Go to voting
                   </Link>
                 </div>

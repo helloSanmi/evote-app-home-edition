@@ -90,6 +90,39 @@ export default function CompleteProfile() {
     return true;
   }), [summaryItems]);
 
+  const syncProfileToStorage = (profile) => {
+    if (typeof window === "undefined" || !profile) return;
+    if (profile.fullName || profile.username) {
+      localStorage.setItem("fullName", profile.fullName || profile.username || "");
+    }
+    localStorage.setItem("state", profile.state || "");
+    localStorage.setItem("residenceLGA", profile.residenceLGA || "");
+    if (profile.needsProfileCompletion) {
+      localStorage.setItem("needsProfileCompletion", "true");
+    } else {
+      localStorage.removeItem("needsProfileCompletion");
+    }
+    if (profile.firstName) {
+      localStorage.setItem("firstName", profile.firstName);
+    }
+    if (profile.lastName) {
+      localStorage.setItem("lastName", profile.lastName);
+    }
+    localStorage.setItem("profilePhoto", profile.profilePhoto || "/placeholder.png");
+    const verificationStatus = (profile.verificationStatus || "none").toLowerCase();
+    if (verificationStatus) {
+      localStorage.setItem("verificationStatus", verificationStatus);
+    } else {
+      localStorage.removeItem("verificationStatus");
+    }
+    if (verificationStatus === "verified") {
+      localStorage.removeItem("needsVerification");
+    } else {
+      localStorage.setItem("needsVerification", "true");
+    }
+    window.dispatchEvent(new Event("storage"));
+  };
+
   useEffect(() => {
     let active = true;
     (async () => {
@@ -101,6 +134,7 @@ export default function CompleteProfile() {
         const profile = await jget("/api/profile/me");
         if (!active) return;
         setExistingProfile(profile);
+        syncProfileToStorage(profile);
         setForm((prev) => ({
           ...prev,
           firstName: profile.firstName || "",
@@ -115,9 +149,9 @@ export default function CompleteProfile() {
           phone: profile.phone || "",
           nationality: profile.nationality || "Nigerian",
         }));
-        if (profile.needsProfileCompletion === false && typeof window !== "undefined") {
-          localStorage.removeItem("needsProfileCompletion");
-          router.replace("/");
+        if (profile.needsProfileCompletion === false) {
+          const verificationStatus = (profile.verificationStatus || "none").toLowerCase();
+          router.replace(verificationStatus === "verified" ? "/" : "/verification-required");
         }
       } catch (err) {
         notifyError(err.message || "Unable to load your profile");
@@ -216,16 +250,25 @@ export default function CompleteProfile() {
         nationality: form.nationality.trim() || "Nigerian",
       });
       notifySuccess("Profile saved.");
-      if (typeof window !== "undefined") {
-        localStorage.removeItem("needsProfileCompletion");
-        const trimmedFirst = form.firstName.trim();
-        const trimmedLast = form.lastName.trim();
-        const combinedFullName = `${trimmedFirst} ${trimmedLast}`.trim();
-        if (trimmedFirst) localStorage.setItem("firstName", trimmedFirst);
-        if (trimmedLast) localStorage.setItem("lastName", trimmedLast);
-        if (combinedFullName) localStorage.setItem("fullName", combinedFullName);
-      }
-      router.replace("/");
+      const refreshed = await jget("/api/profile/me");
+      setExistingProfile(refreshed);
+      syncProfileToStorage(refreshed);
+      setForm((prev) => ({
+        ...prev,
+        firstName: refreshed.firstName || "",
+        lastName: refreshed.lastName || "",
+        gender: (refreshed.gender || "").toLowerCase(),
+        dateOfBirth: refreshed.dateOfBirth ? refreshed.dateOfBirth.slice(0, 10) : "",
+        nationalId: refreshed.nationalId || "",
+        voterCardNumber: formatPvcInput(refreshed.voterCardNumber || ""),
+        residenceAddress: refreshed.residenceAddress || "",
+        state: refreshed.state || "",
+        residenceLGA: refreshed.residenceLGA || "",
+        phone: refreshed.phone || "",
+        nationality: refreshed.nationality || "Nigerian",
+      }));
+      const verificationStatus = (refreshed.verificationStatus || "none").toLowerCase();
+      router.replace(verificationStatus === "verified" ? "/" : "/verification-required");
     } catch (err) {
       notifyError(err.message || "Could not complete profile");
     } finally {

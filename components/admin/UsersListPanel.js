@@ -166,6 +166,11 @@ export default function UsersListPanel({
                     <span className={`inline-flex items-center rounded-md px-3 py-1 ${statusBadgeTone(statusKey)}`}>
                       {statusLabel}
                     </span>
+                    {user.verificationStatus && (
+                      <span className="inline-flex items-center rounded-md bg-emerald-50 px-3 py-1 text-emerald-700">
+                        Verification: {String(user.verificationStatus).charAt(0).toUpperCase() + String(user.verificationStatus).slice(1)}
+                      </span>
+                    )}
                     {user.state && (
                       <span className="inline-flex items-center rounded-md bg-slate-100 px-3 py-1 text-slate-600">
                         {user.state}{user.residenceLGA ? ` • ${user.residenceLGA}` : ""}

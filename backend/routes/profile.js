@@ -52,7 +52,7 @@ const upload = multer({
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const [[u]] = await q(
-      `SELECT id, fullName, firstName, lastName, username, email, state, residenceLGA, dateOfBirth, phone, gender, nationality, residenceAddress, nationalId, voterCardNumber, eligibilityStatus, profilePhoto, role, createdAt, deletedAt, purgeAt
+      `SELECT id, fullName, firstName, lastName, username, email, state, residenceLGA, dateOfBirth, phone, gender, nationality, residenceAddress, nationalId, voterCardNumber, eligibilityStatus, verificationStatus, profilePhoto, role, createdAt, deletedAt, purgeAt
        FROM Users WHERE id=?`,
       [req.user.id]
     );
@@ -353,7 +353,8 @@ router.post("/delete", requireAuth, async (req, res) => {
       entityId: String(req.user.id),
       notes: "User initiated account removal",
     });
-    res.json({ success: true, purgeAt });
+    req.app.get("io")?.to(`user:${req.user.id}`).emit("accountDeleted", { reason: "self" });
+    res.json({ success: true, purgeAt, logout: true });
   } catch (err) {
     console.error("profile/delete:", err);
     res.status(500).json({ error: "SERVER", message: "Failed to schedule deletion" });

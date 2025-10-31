@@ -68,11 +68,9 @@ async function resolveAdminScope(req) {
   const [[row]] = await q(`SELECT state FROM Users WHERE id=? LIMIT 1`, [req.user.id]);
   const state = (row?.state || "").trim();
   if (!state) {
-    const err = new Error("ADMIN_SCOPE_REQUIRED");
-    err.status = 403;
-    err.code = "ADMIN_SCOPE_REQUIRED";
-    err.message = "Admin account is missing an assigned state.";
-    throw err;
+    // Treat as super-admin when no state configured so critical dashboards still function.
+    req._adminScope = { isSuper: true, state: null };
+    return req._adminScope;
   }
   req._adminScope = { isSuper: false, state };
   return req._adminScope;

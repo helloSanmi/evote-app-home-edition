@@ -65,6 +65,17 @@ export default function Login() {
     } else {
       localStorage.removeItem("needsEmailVerification");
     }
+    const verificationStatus = (data.verificationStatus || "").toLowerCase();
+    if (verificationStatus) {
+      localStorage.setItem("verificationStatus", verificationStatus);
+    } else {
+      localStorage.removeItem("verificationStatus");
+    }
+    if (data.requiresVerification || (verificationStatus && verificationStatus !== "verified")) {
+      localStorage.setItem("needsVerification", "true");
+    } else {
+      localStorage.removeItem("needsVerification");
+    }
     localStorage.setItem("profilePhoto", data.profilePhoto || "/placeholder.png");
     localStorage.setItem("role", (data.role || "user").toLowerCase());
     localStorage.setItem("isAdmin", data.isAdmin ? "true" : "false");
@@ -78,14 +89,20 @@ export default function Login() {
       notifyInfo("Check your email to verify your account and unlock every feature.");
     }
     reidentifySocket();
+    const nextRole = (data.role || "user").toLowerCase();
+    const verificationStatus = (data.verificationStatus || "").toLowerCase();
+    const needsVerification =
+      (data.requiresVerification || (verificationStatus && verificationStatus !== "verified")) &&
+      nextRole === "user";
     let destination = "/";
     if (data.requiresPasswordReset) {
       destination = "/force-password-reset";
       notifyInfo("Please set a new password to continue.");
     } else if (data.requiresProfileCompletion) {
       destination = "/complete-profile";
+    } else if (needsVerification) {
+      destination = "/verification-required";
     } else {
-      const nextRole = (data.role || "user").toLowerCase();
       destination = nextRole === "admin" || nextRole === "super-admin" ? "/admin" : "/";
     }
     try {
@@ -103,8 +120,19 @@ export default function Login() {
         const role = (localStorage.getItem("role") || "").toLowerCase();
         const privileged = role === "admin" || role === "super-admin";
         const needsProfile = localStorage.getItem("needsProfileCompletion") === "true";
+        const needsVerification = localStorage.getItem("needsVerification") === "true";
+        const verificationStatus = (localStorage.getItem("verificationStatus") || "none").toLowerCase();
         if (needsProfile && !privileged && window.location.pathname !== "/complete-profile") {
           router.replace("/complete-profile");
+          return;
+        }
+        if (
+          needsVerification &&
+          !privileged &&
+          verificationStatus !== "verified" &&
+          window.location.pathname !== "/verification-required"
+        ) {
+          router.replace("/verification-required");
           return;
         }
         if (privileged) {
@@ -260,7 +288,7 @@ export default function Login() {
                   <button
                     type="submit"
                     disabled={busy}
-                    className="btn-primary w-full justify-center text-base disabled:cursor-not-allowed disabled:opacity-60"
+                    className="btn-primary w-full justify-center text-sm disabled:cursor-not-allowed"
                   >
                     {busy ? "Signing in…" : "Sign in"}
                   </button>

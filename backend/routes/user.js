@@ -16,7 +16,7 @@ router.get("/profile", requireAuth, async (req, res) => {
     const u = await one(
       `SELECT id, fullName, username, email,
               state, residenceLGA, phone, nationality,
-              dateOfBirth, eligibilityStatus, profilePhoto, hasVoted, createdAt
+              dateOfBirth, eligibilityStatus, verificationStatus, profilePhoto, hasVoted, createdAt
        FROM Users WHERE id=?
        LIMIT 1`,
       [req.user.id]
@@ -43,7 +43,7 @@ router.put("/profile", requireAuth, async (req, res) => {
     const u = await one(
       `SELECT id, fullName, username, email,
               state, residenceLGA, phone, nationality,
-              dateOfBirth, eligibilityStatus, profilePhoto, hasVoted, createdAt
+              dateOfBirth, eligibilityStatus, verificationStatus, profilePhoto, hasVoted, createdAt
        FROM Users WHERE id=?
        LIMIT 1`,
       [req.user.id]

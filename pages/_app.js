@@ -10,6 +10,7 @@ import { notifyInfo, notifyError } from "../components/Toast";
 import { apiPost } from "../lib/apiBase";
 import { getSocket, reidentifySocket } from "../lib/socket";
 import { NotificationsProvider } from "../components/NotificationsProvider";
+import { forceLogout } from "../lib/logout";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
@@ -55,6 +56,20 @@ export default function App({ Component, pageProps }) {
             localStorage.removeItem("needsPasswordReset");
           }
         }
+        if (data.verificationStatus) {
+          localStorage.setItem("verificationStatus", data.verificationStatus.toLowerCase());
+        } else {
+          localStorage.removeItem("verificationStatus");
+        }
+        if (typeof data.requiresVerification === "boolean") {
+          if (data.requiresVerification) {
+            localStorage.setItem("needsVerification", "true");
+          } else {
+            localStorage.removeItem("needsVerification");
+          }
+        } else if (data.verificationStatus && data.verificationStatus.toLowerCase() === "verified") {
+          localStorage.removeItem("needsVerification");
+        }
         if (typeof data.emailVerified === "boolean") {
           localStorage.setItem("emailVerified", data.emailVerified ? "true" : "false");
         } else {
@@ -69,9 +84,10 @@ export default function App({ Component, pageProps }) {
         reidentifySocket();
         const elevated = data.role === "admin" || data.role === "super-admin";
         notifyInfo(elevated ? "Admin access enabled." : "Admin access removed.");
+        const onAdminRoute = router.pathname.startsWith("/admin");
         if (elevated) {
-          if (router.pathname !== "/admin") router.replace("/admin");
-        } else if (router.pathname.startsWith("/admin")) {
+          if (!onAdminRoute) router.replace("/admin");
+        } else if (onAdminRoute) {
           router.replace("/");
         }
       } catch (err) {
@@ -79,8 +95,18 @@ export default function App({ Component, pageProps }) {
       }
     };
 
+    const handleAccountDeleted = () => {
+      forceLogout({
+        notify: () => notifyError("Your account has been removed. Please contact support if you believe this is an error."),
+      });
+    };
+
     socket.on("roleUpdated", handleRoleUpdated);
-    return () => socket.off("roleUpdated", handleRoleUpdated);
+    socket.on("accountDeleted", handleAccountDeleted);
+    return () => {
+      socket.off("roleUpdated", handleRoleUpdated);
+      socket.off("accountDeleted", handleAccountDeleted);
+    };
   }, [router]);
 
   useEffect(() => {
@@ -89,6 +115,8 @@ export default function App({ Component, pageProps }) {
       const token = localStorage.getItem("token");
       const needsPasswordReset = localStorage.getItem("needsPasswordReset") === "true";
       const needsCompletion = localStorage.getItem("needsProfileCompletion") === "true";
+      const needsVerification = localStorage.getItem("needsVerification") === "true";
+      const verificationStatus = (localStorage.getItem("verificationStatus") || "none").toLowerCase();
       const role = (localStorage.getItem("role") || "user").toLowerCase();
       const privileged = role === "admin" || role === "super-admin";
       if (token && needsPasswordReset && router.pathname !== "/force-password-reset") {
@@ -97,6 +125,17 @@ export default function App({ Component, pageProps }) {
       }
       if (token && needsCompletion && !privileged && router.pathname !== "/complete-profile") {
         router.replace("/complete-profile");
+        return;
+      }
+      if (
+        token &&
+        !privileged &&
+        needsVerification &&
+        verificationStatus !== "verified" &&
+        router.pathname !== "/verification-required" &&
+        !router.pathname.startsWith("/profile")
+      ) {
+        router.replace("/verification-required");
       }
     };
     enforceAccountFlows();

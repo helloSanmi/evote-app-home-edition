@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiPost } from "../lib/apiBase";
 import { notifyError, notifySuccess } from "./Toast";
+import { forceLogout } from "../lib/logout";
 
 export default function EmailVerificationGate() {
   const [active, setActive] = useState(false);
@@ -38,29 +39,7 @@ export default function EmailVerificationGate() {
   }, [email]);
 
   const signOut = useCallback(() => {
-    try {
-      const keys = [
-        "token",
-        "userId",
-        "username",
-        "fullName",
-        "firstName",
-        "lastName",
-        "profilePhoto",
-        "role",
-        "isAdmin",
-        "eligibilityStatus",
-        "needsProfileCompletion",
-        "email",
-        "emailVerified",
-        "needsEmailVerification",
-      ];
-      keys.forEach((key) => localStorage.removeItem(key));
-      window.dispatchEvent(new Event("storage"));
-    } catch {}
-    if (typeof window !== "undefined") {
-      window.location.replace("/login");
-    }
+    forceLogout();
   }, []);
 
   if (!active) return null;

@@ -21,8 +21,10 @@ app.use(compression());
 app.use(cookieParser());
 
 // CORS (front on :3000 by default; supports comma-separated origins)
-const ORIGINS = (process.env.CORS_ORIGINS)
-  .split(",").map(s => s.trim());
+const ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:3000")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 app.use(cors({ origin: ORIGINS, credentials: true }));
 
 app.use(bodyParser.json({ limit: "2mb" }));
@@ -75,6 +77,7 @@ app.use("/api/profile", require("./routes/profile"));  // profile endpoints
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/notifications", require("./routes/notifications"));
 app.use("/api/privacy", require("./routes/privacy"));
+app.use("/api/verification", require("./routes/verification"));
 
 // Socket.IO
 const server = http.createServer(app);

@@ -67,11 +67,25 @@ module.exports = function logger() {
         const statusCode = res.statusCode || null;
         const queryParams = compactJson(req.query);
         const bodyParams = compactJson(req.body);
-        await q(
-          `INSERT INTO RequestLogs (method,path,userId,ip,statusCode,durationMs,queryParams,bodyParams,country,city,userAgent,referer)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [method, path, userId, ip, statusCode, durationMs, queryParams, bodyParams, country, city, ua, ref]
-        );
+        const values = [method, path, userId, ip, statusCode, durationMs, queryParams, bodyParams, country, city, ua, ref];
+        try {
+          await q(
+            `INSERT INTO RequestLogs (method,path,userId,ip,statusCode,durationMs,queryParams,bodyParams,country,city,userAgent,referer)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            values
+          );
+        } catch (err) {
+          if (err?.code === "ER_NO_REFERENCED_ROW_2" || err?.code === "ER_ROW_IS_REFERENCED_2") {
+            values[2] = null;
+            await q(
+              `INSERT INTO RequestLogs (method,path,userId,ip,statusCode,durationMs,queryParams,bodyParams,country,city,userAgent,referer)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+              values
+            );
+          } else {
+            throw err;
+          }
+        }
       } catch (err) {
         console.error("request-log:insert", err?.message || err);
       }

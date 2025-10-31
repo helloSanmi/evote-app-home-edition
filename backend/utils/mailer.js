@@ -1,12 +1,12 @@
 const fetch = global.fetch;
 
-const MAILERSEND_API_KEY = process.env.MAILERSEND_API_KEY || "";
-const MAILERSEND_FROM_EMAIL = process.env.MAILERSEND_FROM_EMAIL || "";
-const MAILERSEND_FROM_NAME = process.env.MAILERSEND_FROM_NAME || "E-Vote";
-const MAILERSEND_ENDPOINT = "https://api.mailersend.com/v1/email";
+const BREVO_API_KEY = process.env.BREVO_API_KEY || "";
+const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL || "";
+const BREVO_FROM_NAME = process.env.BREVO_FROM_NAME || "E-Vote";
+const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 
 function isConfigured() {
-  return Boolean(MAILERSEND_API_KEY && MAILERSEND_FROM_EMAIL);
+  return Boolean(BREVO_API_KEY && BREVO_FROM_EMAIL);
 }
 
 function normalizeRecipients(to) {
@@ -15,17 +15,32 @@ function normalizeRecipients(to) {
     .map((entry) => {
       if (!entry) return null;
       if (typeof entry === "string") {
-        return { email: entry.trim() };
+        const email = entry.trim();
+        return email ? { email } : null;
       }
       if (entry.email) {
-        return {
-          email: String(entry.email).trim(),
-          name: entry.name ? String(entry.name).trim() : undefined,
-        };
+        const email = String(entry.email).trim();
+        if (!email) return null;
+        const name = entry.name ? String(entry.name).trim() : undefined;
+        return { email, name };
       }
       return null;
     })
     .filter((recipient) => recipient && recipient.email);
+}
+
+function buildPayload({ recipients, subject, html, text }) {
+  const payload = {
+    sender: { email: BREVO_FROM_EMAIL, name: BREVO_FROM_NAME },
+    to: recipients,
+    subject: subject || "",
+  };
+  if (html) payload.htmlContent = html;
+  if (text) payload.textContent = text;
+  if (!html && !text) {
+    payload.textContent = "";
+  }
+  return payload;
 }
 
 async function sendEmail({ to, subject, html, text }) {
@@ -34,23 +49,19 @@ async function sendEmail({ to, subject, html, text }) {
     return { skipped: "no_recipients" };
   }
   if (!isConfigured()) {
-    console.warn("[mailer] MAILERSEND_API_KEY or MAILERSEND_FROM_EMAIL not configured. Email skipped.", { subject });
+    console.warn("[mailer] BREVO_API_KEY or BREVO_FROM_EMAIL not configured. Email skipped.", { subject });
     return { skipped: "not_configured" };
   }
-  const payload = {
-    from: { email: MAILERSEND_FROM_EMAIL, name: MAILERSEND_FROM_NAME },
-    to: recipients,
-    subject,
-    html: html || undefined,
-    text: text || undefined,
-  };
+
+  const payload = buildPayload({ recipients, subject, html, text });
 
   try {
-    const res = await fetch(MAILERSEND_ENDPOINT, {
+    const res = await fetch(BREVO_ENDPOINT, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${MAILERSEND_API_KEY}`,
+        "api-key": BREVO_API_KEY,
         "Content-Type": "application/json",
+        accept: "application/json",
       },
       body: JSON.stringify(payload),
     });
@@ -69,12 +80,9 @@ async function sendEmail({ to, subject, html, text }) {
 async function sendBulkEmail({ recipients, subject, html, text, chunkSize = 50 }) {
   const normalized = normalizeRecipients(recipients);
   if (!normalized.length) return { skipped: "no_recipients" };
-  const chunks = [];
-  for (let i = 0; i < normalized.length; i += chunkSize) {
-    chunks.push(normalized.slice(i, i + chunkSize));
-  }
   const results = [];
-  for (const chunk of chunks) {
+  for (let i = 0; i < normalized.length; i += chunkSize) {
+    const chunk = normalized.slice(i, i + chunkSize);
     // eslint-disable-next-line no-await-in-loop
     const result = await sendEmail({ to: chunk, subject, html, text });
     results.push(result);

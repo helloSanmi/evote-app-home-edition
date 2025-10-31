@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { absUrl } from "../lib/apiBase";
+import { forceLogout } from "../lib/logout";
 import NotificationBell from "./NotificationBell";
 
 export default function Navbar() {
@@ -53,24 +54,7 @@ export default function Navbar() {
   }, [profileOpen, mobileOpen]);
 
   const signOut = () => {
-    try {
-      localStorage.removeItem("token");
-      localStorage.removeItem("userId");
-      localStorage.removeItem("username");
-      localStorage.removeItem("fullName");
-      localStorage.removeItem("profilePhoto");
-      localStorage.removeItem("role");
-      localStorage.removeItem("isAdmin");
-      localStorage.removeItem("state");
-      localStorage.removeItem("residenceLGA");
-      localStorage.removeItem("email");
-      localStorage.removeItem("emailVerified");
-      localStorage.removeItem("needsEmailVerification");
-      localStorage.removeItem("chatGuestName");
-      localStorage.removeItem("chatGuestToken");
-      window.dispatchEvent(new Event("storage"));
-    } catch {}
-    if (typeof window !== "undefined") window.location.replace("/login");
+    forceLogout();
   };
 
   const navItem = (href, label, { compact = false } = {}) => (

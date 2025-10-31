@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import NG from "../public/ng-states-lgas.json";
 import { api, jget, jpost, jput, safeJson } from "../lib/apiBase";
 import { mediaUrl } from "../lib/mediaUrl";
 import { notifyError, notifySuccess } from "../components/Toast";
+import { forceLogout } from "../lib/logout";
 
 export default function Profile() {
   const genderOptions = [
@@ -33,6 +35,12 @@ export default function Profile() {
   const [changeSubmitting, setChangeSubmitting] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [verificationRequests, setVerificationRequests] = useState([]);
+  const [verificationLoading, setVerificationLoading] = useState(false);
+  const [verificationSubmitting, setVerificationSubmitting] = useState(false);
+  const [verificationDocType, setVerificationDocType] = useState("");
+  const [verificationNotes, setVerificationNotes] = useState("");
+  const [verificationFiles, setVerificationFiles] = useState([]);
   const pendingDeletion = Boolean(user?.deletedAt);
   const purgeDate = user?.purgeAt ? new Date(user.purgeAt) : null;
 
@@ -40,6 +48,29 @@ export default function Profile() {
     if (!value) return "-";
     const label = String(value).replace(/[_-]+/g, " ").toLowerCase();
     return label.replace(/\b\w/g, (l) => l.toUpperCase());
+  };
+
+  const formatDocType = (value) => {
+    if (!value) return "-";
+    return String(value)
+      .split(/[._-]/)
+      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+      .join(" ");
+  };
+
+  const formatDateTime = (value) => {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString();
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!Number.isFinite(bytes)) return "-";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
   const formatGender = (value) => {
@@ -68,6 +99,39 @@ export default function Profile() {
     ? (norm.find(x => (x.state || x.name) === form.state)?.lgas || [])
     : []);
 
+  const syncAuthStateFromProfile = (me) => {
+    if (typeof window === "undefined" || !me) return;
+    if (me.fullName || me.username) {
+      localStorage.setItem("fullName", me.fullName || me.username || "");
+    }
+    localStorage.setItem("state", me.state || "");
+    localStorage.setItem("residenceLGA", me.residenceLGA || "");
+    if (me.needsProfileCompletion) {
+      localStorage.setItem("needsProfileCompletion", "true");
+    } else {
+      localStorage.removeItem("needsProfileCompletion");
+    }
+    if (me.firstName) {
+      localStorage.setItem("firstName", me.firstName);
+    }
+    if (me.lastName) {
+      localStorage.setItem("lastName", me.lastName);
+    }
+    localStorage.setItem("profilePhoto", me.profilePhoto || "/placeholder.png");
+    const verificationStatus = (me.verificationStatus || "").toLowerCase();
+    if (verificationStatus) {
+      localStorage.setItem("verificationStatus", verificationStatus);
+    } else {
+      localStorage.removeItem("verificationStatus");
+    }
+    if (verificationStatus === "verified") {
+      localStorage.removeItem("needsVerification");
+    } else {
+      localStorage.setItem("needsVerification", "true");
+    }
+    window.dispatchEvent(new Event("storage"));
+  };
+
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -75,22 +139,7 @@ export default function Profile() {
         const me = await jget("/api/profile/me"); // backend/profile.js -> GET /me (uses Users) :contentReference[oaicite:2]{index=2}
         if (!isMounted) return;
         setUser(me);
-        if (typeof window !== "undefined") {
-          localStorage.setItem("fullName", me.fullName || me.username || "");
-          localStorage.setItem("state", me.state || "");
-          localStorage.setItem("residenceLGA", me.residenceLGA || "");
-          if (me.needsProfileCompletion) {
-            localStorage.setItem("needsProfileCompletion", "true");
-          } else {
-            localStorage.removeItem("needsProfileCompletion");
-          }
-          if (me.firstName) {
-            localStorage.setItem("firstName", me.firstName);
-          }
-          if (me.lastName) {
-            localStorage.setItem("lastName", me.lastName);
-          }
-        }
+        syncAuthStateFromProfile(me);
         setForm({
           state: me.state || "",
           residenceLGA: me.residenceLGA || "",
@@ -108,6 +157,8 @@ export default function Profile() {
   }, []);
 
   const hasPendingProtectedRequest = useMemo(() => changeRequests.some((req) => req.status === "pending"), [changeRequests]);
+  const hasPendingVerification = useMemo(() => verificationRequests.some((req) => req.status === "pending"), [verificationRequests]);
+  const hasProfilePhoto = Boolean((user?.profilePhoto || "").trim());
 
   async function loadChangeRequests(options = {}) {
     const { silent = false } = options;
@@ -123,8 +174,105 @@ export default function Profile() {
     }
   }
 
+  async function loadVerificationRequests({ silent = false } = {}) {
+    if (!silent) setVerificationLoading(true);
+    try {
+      const data = await jget("/api/verification/requests/me");
+      setVerificationRequests(Array.isArray(data) ? data : []);
+    } catch (err) {
+      if (!silent) notifyError(err.message || "Unable to load verification requests");
+      setVerificationRequests([]);
+    } finally {
+      if (!silent) setVerificationLoading(false);
+    }
+  }
+
+  async function refreshProfile() {
+    try {
+      const me = await jget("/api/profile/me");
+      setUser(me);
+      syncAuthStateFromProfile(me);
+    } catch (err) {
+      console.error("profile refresh", err);
+    }
+  }
+
   function updateProtectedField(key, value) {
     setProtectedForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function handleVerificationFilePick(event) {
+    const picked = Array.from(event.target.files || []);
+    if (!picked.length) return;
+    setVerificationFiles((prev) => {
+      const remainingSlots = Math.max(0, 5 - prev.length);
+      return remainingSlots > 0 ? [...prev, ...picked.slice(0, remainingSlots)] : prev;
+    });
+    event.target.value = "";
+  }
+
+  function removeVerificationFile(index) {
+    setVerificationFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function submitVerificationRequest(event) {
+    event.preventDefault();
+    if (!hasProfilePhoto) {
+      notifyError("Add a clear profile photo before submitting verification.");
+      return;
+    }
+    if (!verificationDocType) {
+      notifyError("Select the document type you are submitting");
+      return;
+    }
+    if (!verificationFiles.length) {
+      notifyError("Attach at least one document");
+      return;
+    }
+    if (hasPendingVerification) {
+      notifyError("You already have a request under review");
+      return;
+    }
+    setVerificationSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("documentType", verificationDocType);
+      if (verificationNotes) fd.append("notes", verificationNotes);
+      verificationFiles.forEach((file) => fd.append("files", file));
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const resp = await fetch(`${api}/api/verification/requests`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const json = await safeJson(resp);
+      if (!resp.ok || !json?.success) {
+        throw new Error(json?.message || "Failed to submit verification documents");
+      }
+      notifySuccess("Verification submitted. We will notify you once it's reviewed.");
+      setVerificationDocType("");
+      setVerificationNotes("");
+      setVerificationFiles([]);
+      await loadVerificationRequests({ silent: true });
+      await refreshProfile();
+    } catch (err) {
+      notifyError(err.message || "Failed to submit verification");
+    } finally {
+      setVerificationSubmitting(false);
+    }
+  }
+
+  async function cancelVerificationRequest(id) {
+    if (!id) return;
+    if (!window.confirm("Cancel this verification request?")) return;
+    try {
+      await jpost(`/api/verification/requests/${id}/cancel`, {});
+      notifySuccess("Verification request cancelled");
+      await loadVerificationRequests({ silent: true });
+      await refreshProfile();
+    } catch (err) {
+      notifyError(err.message || "Failed to cancel request");
+    }
   }
 
   async function submitProtectedChanges(e) {
@@ -171,13 +319,7 @@ export default function Profile() {
       setEditing(false);
       const me = await jget("/api/profile/me");
       setUser(me);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("fullName", me.fullName || me.username || "");
-        localStorage.setItem("profilePhoto", me.profilePhoto || "/placeholder.png");
-        localStorage.setItem("state", me.state || "");
-        localStorage.setItem("residenceLGA", me.residenceLGA || "");
-        window.dispatchEvent(new Event("storage"));
-      }
+      syncAuthStateFromProfile(me);
     } catch (e) {
       notifyError(e.message);
     } finally {
@@ -195,9 +337,7 @@ export default function Profile() {
     try {
       await jpost("/api/profile/delete", { password: deletePassword.trim() });
       notifySuccess("Account scheduled for deletion");
-      setDeletePassword("");
-      const me = await jget("/api/profile/me");
-      setUser(me);
+      forceLogout();
     } catch (err) {
       notifyError(err.message || "Unable to schedule deletion");
     } finally {
@@ -209,7 +349,10 @@ export default function Profile() {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
-    if (!/image\/(png|jpe?g)/i.test(f.type)) return notifyError("Only PNG/JPG allowed");
+    if (!String(f.type || "").toLowerCase().startsWith("image/")) {
+      notifyError("Only image files are allowed for profile photos.");
+      return;
+    }
     const fd = new FormData();
     fd.append("file", f);
     try {
@@ -244,7 +387,13 @@ export default function Profile() {
             alt={user.fullName}
             title="Click to change"
           />
-          <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={onPickAvatar} />
+          <input
+            type="file"
+            accept="image/*"
+            capture="user"
+            className="hidden"
+            onChange={onPickAvatar}
+          />
           <span className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-full transition" />
         </label>
         <div className="text-center sm:text-left">
@@ -281,6 +430,7 @@ export default function Profile() {
         <Field label="Username" value={user.username} />
         <Field label="Email" value={user.email} />
         <Field label="Eligibility status" value={formatStatus(user.eligibilityStatus)} />
+        <Field label="Verification status" value={formatStatus(user.verificationStatus)} />
 
         <Field label="Gender">
           {editing ? (
@@ -352,6 +502,143 @@ export default function Profile() {
         <Field label="Nationality" value={user.nationality || "Nigerian"} />
         <Field label="National ID (NIN)" value={user.nationalId || "-"} />
         <Field label="PVC number" value={user.voterCardNumber || "-"} />
+      </div>
+
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Identity verification</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Upload official documents (NIN, voter’s card, passport, or utility bill) so administrators can verify your identity for restricted elections.
+          </p>
+        </div>
+        {!hasProfilePhoto && (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            Add a clear profile photo or take one with your device camera before sending verification documents. This helps reviewers confirm your identity.
+          </div>
+        )}
+        <form className="space-y-4" onSubmit={submitVerificationRequest}>
+          {hasPendingVerification && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+              You already have a verification request awaiting review. Submit new documents after the current one is resolved.
+            </div>
+          )}
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="form-label" htmlFor="verification-doc">Document type</label>
+              <select
+                id="verification-doc"
+                className="form-control"
+                value={verificationDocType}
+                onChange={(e) => setVerificationDocType(e.target.value)}
+                disabled={verificationSubmitting || hasPendingVerification || !hasProfilePhoto}
+              >
+                <option value="">Select document…</option>
+                <option value="national-id">National ID</option>
+                <option value="voters-card">Voter's Card</option>
+                <option value="passport">International Passport</option>
+                <option value="utility-bill">Utility Bill</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="form-label" htmlFor="verification-notes">Notes for reviewer</label>
+              <textarea
+                id="verification-notes"
+                className="form-control"
+                rows={2}
+                value={verificationNotes}
+                onChange={(e) => setVerificationNotes(e.target.value.slice(0, 600))}
+                disabled={verificationSubmitting || !hasProfilePhoto}
+                placeholder="Optional context about this submission"
+              />
+            </div>
+          </div>
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 px-4 py-6 text-center">
+            <p className="text-sm text-slate-600">Attach clear photos or PDFs. Maximum of five files per submission.</p>
+            <div className="mt-3 flex justify-center">
+              <label
+                className="btn-secondary"
+                aria-disabled={verificationSubmitting || hasPendingVerification || !hasProfilePhoto}
+              >
+                Pick files
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf,video/mp4"
+                  className="hidden"
+                  onChange={handleVerificationFilePick}
+                  disabled={verificationSubmitting || hasPendingVerification || !hasProfilePhoto}
+                />
+              </label>
+            </div>
+            {verificationFiles.length > 0 && (
+              <ul className="mt-4 space-y-2 text-left text-sm text-slate-700">
+                {verificationFiles.map((file, index) => (
+                  <li key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 shadow-sm">
+                    <span className="truncate">{file.name}</span>
+                    <button type="button" className="text-xs font-semibold text-rose-600" onClick={() => removeVerificationFile(index)} disabled={verificationSubmitting}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-3">
+            {hasPendingVerification && <span className="text-xs text-amber-600">A request is currently under review.</span>}
+            <button type="submit" className="btn-primary px-4 py-2 text-sm disabled:opacity-50" disabled={verificationSubmitting || hasPendingVerification || !verificationDocType || verificationFiles.length === 0 || !hasProfilePhoto}>
+              {verificationSubmitting ? "Submitting…" : "Submit documents"}
+            </button>
+          </div>
+        </form>
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-slate-900">Submission history</h3>
+          {verificationLoading ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">Loading verification requests…</div>
+          ) : verificationRequests.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">No verification submissions yet.</div>
+          ) : (
+            <ul className="space-y-3">
+              {verificationRequests.map((request) => {
+                const status = String(request.status || "pending").toLowerCase();
+                const tone = status === "approved" ? "text-emerald-600" : status === "rejected" ? "text-rose-600" : status === "cancelled" ? "text-slate-500" : "text-amber-600";
+                const isPending = status === "pending";
+                return (
+                  <li key={request.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{formatDocType(request.documentType)}</div>
+                        <div className="text-xs text-slate-500">Submitted {formatDateTime(request.submittedAt)}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${tone}`}>{status}</span>
+                        {isPending && (
+                          <button type="button" className="text-xs font-semibold text-rose-600" onClick={() => cancelVerificationRequest(request.id)}>Cancel</button>
+                        )}
+                      </div>
+                    </div>
+                    {request.adminNotes && (
+                      <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">Reviewer notes: {request.adminNotes}</div>
+                    )}
+                    {request.attachments?.length ? (
+                      <div className="mt-3 space-y-2">
+                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Files</div>
+                        <ul className="space-y-1 text-xs text-slate-600">
+                          {request.attachments.map((file) => (
+                            <li key={file.id} className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
+                              <span className="truncate">{file.fileName}</span>
+                              <span className="text-[11px] text-slate-400">{formatFileSize(file.size)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow p-6 space-y-4">

@@ -102,6 +102,23 @@ export function NotificationsProvider({ children }) {
         }
         return [normalized, ...prev].slice(0, 120);
       });
+      if (typeof window !== "undefined" && normalized?.type?.startsWith("verification.")) {
+        const type = normalized.type.toLowerCase();
+        let status = null;
+        if (type.endsWith("approved")) {
+          status = "verified";
+        } else if (type.endsWith("rejected")) {
+          status = "none";
+          localStorage.setItem("needsVerification", "true");
+        }
+        if (status) {
+          localStorage.setItem("verificationStatus", status);
+          if (status === "verified") {
+            localStorage.removeItem("needsVerification");
+          }
+          window.dispatchEvent(new Event("storage"));
+        }
+      }
     };
     socket.on("notification:new", handler);
     return () => socket.off("notification:new", handler);

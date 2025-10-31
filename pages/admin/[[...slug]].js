@@ -9,16 +9,23 @@ import {
   safeJson,
   absUrl,
   API_BASE,
-} from "../lib/apiBase";
-import { notifyError, notifySuccess } from "../components/Toast";
-import NG from "../public/ng-states-lgas.json";
-import { getSocket } from "../lib/socket";
-import ConfirmDialog from "../components/ConfirmDialog";
-import DateTimePicker from "../components/DateTimePicker";
-import { resolveSessionTiming, formatCountdown } from "../lib/time";
-import CollapsibleSection from "../components/admin/CollapsibleSection";
-import UsersListPanel from "../components/admin/UsersListPanel";
-import CreateUserPanel from "../components/admin/CreateUserPanel";
+} from "../../lib/apiBase";
+import { notifyError, notifySuccess } from "../../components/Toast";
+import NG from "../../public/ng-states-lgas.json";
+import { getSocket } from "../../lib/socket";
+import ConfirmDialog from "../../components/ConfirmDialog";
+import DateTimePicker from "../../components/DateTimePicker";
+import { resolveSessionTiming, formatCountdown } from "../../lib/time";
+import CollapsibleSection from "../../components/admin/CollapsibleSection";
+import UsersListPanel from "../../components/admin/UsersListPanel";
+import CreateUserPanel from "../../components/admin/CreateUserPanel";
+
+const VERIFICATION_STATUS_BADGES = {
+  pending: "border-amber-200 bg-amber-50 text-amber-700",
+  approved: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  rejected: "border-rose-200 bg-rose-50 text-rose-700",
+  cancelled: "border-slate-200 bg-slate-100 text-slate-600",
+};
 
 export default function AdminPage() {
   const router = useRouter();
@@ -30,6 +37,7 @@ export default function AdminPage() {
 
   const [viewerRole, setViewerRole] = useState("user");
   const [viewerState, setViewerState] = useState("");
+  const isPrivileged = viewerRole === "admin" || viewerRole === "super-admin";
 
   const states = useMemo(() => {
     if (Array.isArray(NG?.states)) return NG.states.map((s) => ({ label: s.state || s.name, lgas: s.lgas || [] }));
@@ -67,6 +75,17 @@ export default function AdminPage() {
   const [changeRequestNotes, setChangeRequestNotes] = useState({});
   const [changeRequestStatus, setChangeRequestStatus] = useState("pending");
   const [changeRequestActionId, setChangeRequestActionId] = useState(null);
+  const [verificationRequests, setVerificationRequests] = useState([]);
+  const [verificationLoading, setVerificationLoading] = useState(false);
+  const [verificationTotal, setVerificationTotal] = useState(0);
+  const [verificationPage, setVerificationPage] = useState(1);
+  const [verificationPageSize] = useState(20);
+  const [verificationStatusFilter, setVerificationStatusFilter] = useState("pending");
+  const [verificationSelectedId, setVerificationSelectedId] = useState(null);
+  const [verificationDetail, setVerificationDetail] = useState(null);
+  const [verificationDetailLoading, setVerificationDetailLoading] = useState(false);
+  const [verificationDecisionLoading, setVerificationDecisionLoading] = useState(false);
+  const [verificationNotes, setVerificationNotes] = useState("");
 
   const sessionsRef = useRef([]);
   const userSearchReady = useRef(false);
@@ -209,6 +228,7 @@ export default function AdminPage() {
     { id: "overview", label: "Overview" },
     { id: "sessions", label: "Sessions" },
     { id: "live", label: "Live" },
+    { id: "verification", label: "Verification", roles: ["admin", "super-admin"] },
     { id: "archive", label: "Results" },
     { id: "analytics", label: "Analytics" },
     { id: "users", label: "Users" },
@@ -217,12 +237,42 @@ export default function AdminPage() {
     { id: "privacy", label: "Privacy & Consent" },
     { id: "logs", label: "Request Logs", roles: ["super-admin"] },
   ], []);
+  const tabDescriptions = useMemo(() => ({
+    overview: "Snapshot of platform activity and tasks.",
+    sessions: "Create, schedule, or adjust upcoming elections.",
+    live: "Monitor active elections and intervene when needed.",
+    verification: "Review voter identity submissions and approve access.",
+    archive: "Publish results and review completed sessions.",
+    analytics: "Inspect participation trends and voter insights.",
+    users: "Manage voter access, roles, and account status.",
+    "create-user": "Manually onboard admins or voters.",
+    "profile-approvals": "Review profile change and verification requests.",
+    privacy: "Track consent preferences and legal acknowledgements.",
+    logs: "Audit API activity and security-sensitive events.",
+  }), []);
   const visibleTabs = useMemo(() => (
     tabs.filter((tabItem) => {
       if (tabItem.roles && !tabItem.roles.includes(viewerRole)) return false;
       return true;
     })
   ), [tabs, viewerRole]);
+  const updateUrlForTab = useCallback((nextTab) => {
+    if (!router.isReady) return;
+    const segments = nextTab === "overview" ? [] : [nextTab];
+    const query = segments.length ? { slug: segments } : {};
+    const href = segments.length ? `/admin/${segments.join("/")}` : "/admin";
+    router.replace(
+      { pathname: "/admin/[[...slug]]", query },
+      href,
+      { shallow: true }
+    );
+  }, [router]);
+  const changeTab = useCallback((nextTab, options = {}) => {
+    setTab(nextTab);
+    if (!options.skipUrl) {
+      updateUrlForTab(nextTab);
+    }
+  }, [updateUrlForTab]);
 
   const roleSummaries = useMemo(() => [
     {
@@ -287,11 +337,13 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (tab !== "profile-approvals") return;
+    if (!isPrivileged) return;
     loadChangeRequests({ status: changeRequestStatus });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, changeRequestStatus]);
+    // eslint-disable-next-line react-hooks-exhaustive-deps
+  }, [tab, isPrivileged, changeRequestStatus]);
 
   useEffect(() => {
+    if (!isPrivileged) return;
     if (!userSearchReady.current) {
       userSearchReady.current = true;
       return;
@@ -301,19 +353,21 @@ export default function AdminPage() {
     }, 350);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userSearch]);
+  }, [isPrivileged, userSearch]);
 
   useEffect(() => {
     if (viewerRole !== "admin") return;
+    if (!isPrivileged) return;
     if (!viewerState) return;
     if (userStateFilter === viewerState && !userLgaFilter) return;
     setUserStateFilter(viewerState);
     setUserLgaFilter("");
     loadUsers({ state: viewerState, lga: "", page: 1 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewerRole, viewerState]);
+    // eslint-disable-next-line react-hooks-exhaustive-deps
+  }, [viewerRole, isPrivileged, viewerState]);
 
   useEffect(() => {
+    if (!isPrivileged) return;
     loadUnpublished();
     loadSessions();
     loadUsers();
@@ -346,7 +400,7 @@ export default function AdminPage() {
       socket?.off("voteUpdate", handleVote);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isPrivileged]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -363,10 +417,30 @@ export default function AdminPage() {
   }, [tab]);
 
   useEffect(() => {
-    if (!visibleTabs.some((item) => item.id === tab)) {
-      setTab(visibleTabs[0]?.id || "overview");
+    if (!router.isReady) return;
+    const rawSlug = router.query?.slug;
+    const desiredTab = Array.isArray(rawSlug) ? rawSlug[0] || "overview" : rawSlug || "overview";
+    const allowed = visibleTabs.some((item) => item.id === desiredTab);
+    if (!allowed) {
+      const fallback = visibleTabs[0]?.id || "overview";
+      if (!fallback) return;
+      if (tab !== fallback) {
+        changeTab(fallback);
+      } else {
+        updateUrlForTab(fallback);
+      }
+      return;
     }
-  }, [visibleTabs, tab]);
+    if (tab !== desiredTab) {
+      changeTab(desiredTab, { skipUrl: true });
+      return;
+    }
+    const canonicalSlug = desiredTab === "overview" ? null : desiredTab;
+    const currentSlug = Array.isArray(rawSlug) ? rawSlug[0] || null : rawSlug || null;
+    if (canonicalSlug !== currentSlug) {
+      updateUrlForTab(desiredTab);
+    }
+  }, [router.isReady, router.query.slug, visibleTabs, tab, changeTab, updateUrlForTab]);
 
   useEffect(() => {
     if (sessionStep === 3) {
@@ -390,14 +464,69 @@ export default function AdminPage() {
   }, [sessionStep, scope, scopeState, scopeLGA]);
 
   useEffect(() => {
+    if (tab !== "verification") return;
+    if (!isPrivileged) return;
+    loadVerificationRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, isPrivileged, verificationStatusFilter, verificationPage]);
+
+  useEffect(() => {
+    if (tab !== "verification") return;
+    if (!isPrivileged) return;
+    if (!verificationSelectedId && verificationRequests.length > 0) {
+      const first = verificationRequests[0];
+      setVerificationSelectedId(first.id);
+      return;
+    }
+    if (verificationSelectedId && !verificationRequests.some((item) => item.id === verificationSelectedId)) {
+      const fallback = verificationRequests[0];
+      if (fallback) {
+        setVerificationSelectedId(fallback.id);
+      } else {
+        setVerificationSelectedId(null);
+        setVerificationDetail(null);
+      }
+    }
+  }, [tab, isPrivileged, verificationRequests, verificationSelectedId]);
+
+  useEffect(() => {
+    if (tab !== "verification") return;
+    if (!isPrivileged) return;
+    if (!verificationSelectedId) {
+      setVerificationDetail(null);
+      return;
+    }
+    loadVerificationDetail(verificationSelectedId);
+    // eslint-disable-next-line react-hooks-exhaustive-deps
+  }, [tab, isPrivileged, verificationSelectedId]);
+
+  useEffect(() => {
+    if (tab === "verification") return;
+    setVerificationSelectedId(null);
+    setVerificationDetail(null);
+  }, [tab]);
+
+  useEffect(() => {
+    if (!isPrivileged) {
+      clearInterval(liveTimer.current);
+      liveTimer.current = null;
+      return undefined;
+    }
     clearInterval(liveTimer.current);
     liveTimer.current = setInterval(refreshLive, 6000);
     refreshLive();
     return () => clearInterval(liveTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions]);
+  }, [isPrivileged, sessions]);
 
   useEffect(() => {
+    if (!isPrivileged) {
+      if (sessionsPollRef.current) {
+        clearInterval(sessionsPollRef.current);
+        sessionsPollRef.current = null;
+      }
+      return undefined;
+    }
     if (sessionsPollRef.current) clearInterval(sessionsPollRef.current);
     sessionsPollRef.current = setInterval(() => {
       loadSessions({ silent: true, suppressErrors: true });
@@ -407,7 +536,7 @@ export default function AdminPage() {
       if (sessionsPollRef.current) clearInterval(sessionsPollRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isPrivileged]);
 
   const isActive = (period) => {
     if (!period || period.forcedEnded || period.resultsPublished) return false;
@@ -779,6 +908,7 @@ export default function AdminPage() {
   }
 
   async function loadChangeRequests(options = {}) {
+    if (!isPrivileged) return;
     const { status = changeRequestStatus, silent = false } = options;
     if (!silent) setChangeRequestsLoading(true);
     try {
@@ -825,6 +955,29 @@ export default function AdminPage() {
     if (Number.isNaN(date.getTime())) return "—";
     return date.toLocaleString();
   }, []);
+  const formatFileSize = useCallback((value) => {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "—";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }, []);
+  const formatTitle = useCallback((value) => {
+    if (!value) return "—";
+    return String(value)
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }, []);
+  const verificationTotalPages = useMemo(() => {
+    const size = verificationPageSize || 1;
+    if (size <= 0) return 1;
+    return Math.max(1, Math.ceil((verificationTotal || 0) / size));
+  }, [verificationTotal, verificationPageSize]);
+  const verificationRangeStart = verificationTotal === 0 ? 0 : (verificationPage - 1) * verificationPageSize + 1;
+  const verificationRangeEnd = verificationTotal === 0 ? 0 : Math.min(verificationTotal, verificationPage * verificationPageSize);
 
   useEffect(() => {
     statsRef.current = stats;
@@ -845,12 +998,14 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (tab !== "analytics") return;
+    if (!isPrivileged) return;
     if (analyticsLoading) return;
     if (analytics) return;
     loadAnalytics({ suppressErrors: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, isPrivileged]);
   async function loadUnpublished(options = {}) {
+    if (!isPrivileged) return;
     const { silent = false, suppressErrors = false } = options;
     if (!silent) setUnpubLoading(true);
     try {
@@ -867,6 +1022,7 @@ export default function AdminPage() {
   }
 
   async function loadUsers(options = {}) {
+    if (!isPrivileged) return;
     const {
       search,
       page,
@@ -915,7 +1071,80 @@ export default function AdminPage() {
     }
   }
 
+  async function loadVerificationRequests(options = {}) {
+    if (!isPrivileged) return;
+    const { silent = false, page, status } = options;
+    const effectiveStatus = status ?? verificationStatusFilter;
+    const effectivePage = Number.isFinite(page) ? Number(page) : verificationPage;
+    const effectivePageSize = verificationPageSize;
+    if (!silent) setVerificationLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (effectiveStatus && effectiveStatus !== "all") params.set("status", effectiveStatus);
+      params.set("page", String(effectivePage));
+      params.set("pageSize", String(effectivePageSize));
+      const query = params.toString();
+      const data = await apiGet(`/api/admin/verification/requests${query ? `?${query}` : ""}`);
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setVerificationRequests(items);
+      setVerificationTotal(Number.isFinite(data?.total) ? Number(data.total) : items.length);
+      setVerificationPage(Number.isFinite(data?.page) ? Number(data.page) : effectivePage);
+    } catch (err) {
+      if (!silent) {
+        notifyError(err.message || "Failed to load verification requests");
+      }
+      setVerificationRequests([]);
+      setVerificationTotal(0);
+    } finally {
+      if (!silent) setVerificationLoading(false);
+    }
+  }
+
+  async function loadVerificationDetail(id, options = {}) {
+    if (!isPrivileged) return;
+    const requestId = Number(id);
+    if (!requestId) return;
+    const { silent = false } = options;
+    if (!silent) setVerificationDetailLoading(true);
+    try {
+      const data = await apiGet(`/api/admin/verification/requests/${requestId}`);
+      setVerificationDetail(data);
+      setVerificationNotes(data?.adminNotes || "");
+    } catch (err) {
+      if (!silent) {
+        notifyError(err.message || "Failed to load verification request");
+      }
+      setVerificationDetail(null);
+    } finally {
+      if (!silent) setVerificationDetailLoading(false);
+    }
+  }
+
+  async function decideVerification(decision) {
+    if (!isPrivileged) return;
+    if (!verificationSelectedId) return;
+    if (!["approved", "rejected"].includes(decision)) {
+      notifyError("Decision must be approve or reject");
+      return;
+    }
+    setVerificationDecisionLoading(true);
+    try {
+      await apiPost(`/api/admin/verification/requests/${verificationSelectedId}/decision`, {
+        decision,
+        adminNotes: verificationNotes?.trim() || null,
+      });
+      notifySuccess(decision === "approved" ? "Verification approved" : "Verification rejected");
+      await loadVerificationRequests({ silent: true, page: decision === "approved" && verificationStatusFilter === "pending" ? 1 : verificationPage });
+      await loadVerificationDetail(verificationSelectedId, { silent: true });
+    } catch (err) {
+      notifyError(err.message || "Unable to submit decision");
+    } finally {
+      setVerificationDecisionLoading(false);
+    }
+  }
+
   async function loadSessions(options = {}) {
+    if (!isPrivileged) return;
     const { silent = false, suppressErrors = false } = options;
     if (!silent) setLoadingSessions(true);
     try {
@@ -960,6 +1189,12 @@ export default function AdminPage() {
     const next = value || "";
     setUserLgaFilter(next);
     loadUsers({ lga: next, page: 1 });
+  };
+
+  const handleVerificationStatusChange = (value) => {
+    const normalized = value || "all";
+    setVerificationStatusFilter(normalized);
+    setVerificationPage(1);
   };
 
   async function handlePickImage(e) {
@@ -1234,6 +1469,7 @@ export default function AdminPage() {
   }
 
   async function refreshLive() {
+    if (!isPrivileged) return;
     try {
       const activeSessions = sessions.filter(isActive);
       const scoreboard = [];
@@ -1250,6 +1486,7 @@ export default function AdminPage() {
   }
 
   const loadAnalytics = async ({ suppressErrors = false } = {}) => {
+    if (!isPrivileged) return;
     if (analyticsLoading) return;
     setAnalyticsLoading(true);
     if (!suppressErrors) setAnalyticsError(null);
@@ -1268,6 +1505,7 @@ export default function AdminPage() {
 
   const loadConsentDashboard = useCallback(
     async ({ suppressErrors = false } = {}) => {
+      if (!isPrivileged) return;
       setConsentLoading(true);
       if (!suppressErrors) setConsentError(null);
       try {
@@ -1323,10 +1561,11 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (tab !== "privacy") return;
+    if (!isPrivileged) return;
     if (consentLoading) return;
     if (consentSummary) return;
     loadConsentDashboard({ suppressErrors: true });
-  }, [tab, consentLoading, consentSummary, loadConsentDashboard]);
+  }, [tab, isPrivileged, consentLoading, consentSummary, loadConsentDashboard]);
 
   async function disableUser(user) {
     try {
@@ -1752,10 +1991,36 @@ export default function AdminPage() {
 
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6">
-      <header className="rounded-[2.5rem] border border-slate-200 bg-white px-4 py-8 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur sm:px-6 sm:py-10 md:px-10">
-        <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
+    <div className="mx-auto w-full max-w-7xl px-4 py-6">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <nav className="sticky top-16 z-30 mb-2 flex flex-wrap gap-2 overflow-x-auto rounded-3xl border border-slate-200 bg-white/95 px-3 py-3 shadow-sm backdrop-blur lg:top-24 lg:mb-0 lg:w-60 lg:flex-col lg:gap-1 lg:overflow-visible lg:self-start">
+          {visibleTabs.map((item) => {
+            const active = tab === item.id;
+            const description = tabDescriptions[item.id];
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => changeTab(item.id)}
+                className={`flex min-w-[120px] flex-col items-start gap-0.5 rounded-2xl border px-3 py-2 text-left text-xs font-semibold transition sm:text-sm lg:min-w-0 ${
+                  active
+                    ? "border-indigo-200 bg-indigo-50 text-indigo-700 shadow"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+                }`}
+              >
+                <span>{item.label}</span>
+                {description && (
+                  <span className="hidden text-[11px] font-normal text-slate-500 lg:block">{description}</span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="flex-1 space-y-8">
+          <header className="rounded-[2.5rem] border border-slate-200 bg-white px-4 py-8 shadow-[0_35px_110px_-65px_rgba(15,23,42,0.55)] backdrop-blur sm:px-6 sm:py-10 md:px-10">
+            <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-2">
             <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Admin console</p>
             <h1 className="text-3xl font-semibold text-slate-900">Election control centre</h1>
             <p className="text-sm text-slate-500 md:max-w-xl">
@@ -1769,23 +2034,6 @@ export default function AdminPage() {
           </div>
         </div>
       </header>
-
-      <nav className="sticky top-16 z-30 mb-6 flex flex-wrap gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur md:top-20 md:flex-nowrap">
-        {visibleTabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            className={`flex-shrink-0 rounded-md border px-3 py-1.5 text-xs font-semibold transition sm:px-4 sm:py-2 sm:text-sm ${
-              tab === item.id
-                ? "border-indigo-200 bg-indigo-50 text-indigo-700 shadow"
-                : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
-            }`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
 
       {tab === "overview" && (
         <div className="space-y-5">
@@ -2679,6 +2927,303 @@ export default function AdminPage() {
         />
       )}
 
+      {tab === "verification" && (
+        <div className="flex flex-col gap-6 lg:flex-row">
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 lg:w-[58%]">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Verification queue</h2>
+                  <p className="text-sm text-slate-500">Review identity documents before unlocking full account access.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={verificationStatusFilter}
+                    onChange={(e) => handleVerificationStatusChange(e.target.value)}
+                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200/40"
+                  >
+                    <option value="pending">Pending review</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="cancelled">Cancelled</option>
+                    <option value="all">All statuses</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => loadVerificationRequests({ silent: false })}
+                    className="btn-secondary px-3 py-1 text-xs"
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
+
+              {verificationLoading ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500 animate-pulse">
+                  Loading verification requests…
+                </div>
+              ) : verificationRequests.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-5 text-sm text-slate-500">
+                  {verificationStatusFilter === "pending"
+                    ? "No pending verification submissions right now."
+                    : "No verification requests matched the current filter."}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {verificationRequests.map((request) => {
+                    const statusKey = String(request.status || "").toLowerCase();
+                    const badgeClass = VERIFICATION_STATUS_BADGES[statusKey] || "border-slate-200 bg-slate-100 text-slate-600";
+                    const attachments = Array.isArray(request.attachments) ? request.attachments : [];
+                    const isActive = request.id === verificationSelectedId;
+                    return (
+                      <button
+                        key={request.id}
+                        type="button"
+                        onClick={() => setVerificationSelectedId(request.id)}
+                        className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                          isActive
+                            ? "border-indigo-300 bg-indigo-50 shadow"
+                            : "border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50"
+                        }`}
+                      >
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{request.fullName || `User #${request.userId}`}</p>
+                            <p className="text-xs text-slate-500">{request.email || "No email on file"}</p>
+                          </div>
+                          <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase ${badgeClass}`}>
+                            {formatTitle(request.status)}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-[11px] uppercase tracking-wide text-slate-400 sm:grid-cols-3">
+                          <div>
+                            <span className="font-semibold text-slate-500">Submitted</span>
+                            <p className="mt-1 text-slate-700">{formatDateTime(request.submittedAt)}</p>
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-500">Document</span>
+                            <p className="mt-1 text-slate-700">{formatTitle(request.documentType)}</p>
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-500">Attachments</span>
+                            <p className="mt-1 text-slate-700">{attachments.length}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                          {request.state && (
+                            <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
+                              {request.state}
+                            </span>
+                          )}
+                          {request.residenceLGA && (
+                            <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
+                              {request.residenceLGA}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {verificationRequests.length > 0 && (
+                <div className="mt-5 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs text-slate-500 sm:flex-row">
+                  <span>
+                    {verificationTotal === 0
+                      ? "No requests"
+                      : `Showing ${verificationRangeStart}-${verificationRangeEnd} of ${verificationTotal}`}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVerificationPage((prev) => Math.max(1, prev - 1))}
+                      disabled={verificationPage <= 1}
+                      className="btn-secondary px-3 py-1 text-xs disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <span className="font-semibold text-slate-700">{verificationPage} / {verificationTotalPages}</span>
+                    <button
+                      type="button"
+                      onClick={() => setVerificationPage((prev) => Math.min(verificationTotalPages, prev + 1))}
+                      disabled={verificationPage >= verificationTotalPages}
+                      className="btn-secondary px-3 py-1 text-xs disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 lg:flex-1">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Request details</h2>
+                  <p className="text-sm text-slate-500">Compare submitted documents, capture review notes, and record a decision.</p>
+                </div>
+                {verificationSelectedId && (
+                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-500">
+                    ID #{verificationSelectedId}
+                  </span>
+                )}
+              </div>
+
+              {!verificationSelectedId ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                  Choose a request from the queue to view supporting documents and approve or reject it.
+                </div>
+              ) : verificationDetailLoading ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500 animate-pulse">
+                  Loading request details…
+                </div>
+              ) : !verificationDetail ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-600">
+                  We could not load the selected request. Try refreshing the queue and selecting it again.
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{verificationDetail.fullName || `User #${verificationDetail.userId}`}</p>
+                        <p className="text-xs text-slate-500">{verificationDetail.email || "No email on file"}</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase ${
+                          VERIFICATION_STATUS_BADGES[String(verificationDetail.status || "").toLowerCase()] || "border-slate-200 bg-slate-100 text-slate-600"
+                        }`}>
+                          {formatTitle(verificationDetail.status)}
+                        </span>
+                        <p className="text-xs text-slate-400">Submitted {formatDateTime(verificationDetail.submittedAt)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-3 text-[11px] uppercase tracking-wide text-slate-400 sm:grid-cols-2">
+                      <div>
+                        <span className="font-semibold text-slate-500">Document type</span>
+                        <p className="mt-1 text-slate-700">{formatTitle(verificationDetail.documentType)}</p>
+                      </div>
+                      <div>
+                        <span className="font-semibold text-slate-500">Residency</span>
+                        <p className="mt-1 text-slate-700">
+                          {[verificationDetail.state, verificationDetail.residenceLGA].filter(Boolean).join(" • ") || "—"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {verificationDetail.notes && (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Applicant note</p>
+                      <p className="mt-2 text-sm text-slate-700">{verificationDetail.notes}</p>
+                    </div>
+                  )}
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <p className="text-sm font-semibold text-slate-900">Uploaded documents</p>
+                    <div className="mt-3 space-y-3">
+                      {Array.isArray(verificationDetail.attachments) && verificationDetail.attachments.length > 0 ? (
+                        verificationDetail.attachments.map((file) => {
+                          const downloadHref = file.signedUrl || "#";
+                          const disabled = !file.signedUrl;
+                          return (
+                            <div key={file.id} className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-sm font-medium text-slate-800">{file.fileName || "Attachment"}</p>
+                                <p className="text-xs text-slate-500">
+                                  {(file.contentType || "File")} • {formatFileSize(file.size)} • {formatDateTime(file.uploadedAt)}
+                                </p>
+                              </div>
+                              <a
+                                href={downloadHref}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`btn-secondary px-3 py-1 text-xs ${disabled ? "pointer-events-none opacity-60" : ""}`}
+                                aria-disabled={disabled}
+                              >
+                                {disabled ? "Unavailable" : "Open"}
+                              </a>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                          No supporting files were uploaded for this request.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {verificationDetail.metadata && (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Metadata</p>
+                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-sm text-slate-700">
+                        {(() => {
+                          if (!verificationDetail.metadata) return "";
+                          if (typeof verificationDetail.metadata === "string") {
+                            try {
+                              return JSON.stringify(JSON.parse(verificationDetail.metadata), null, 2);
+                            } catch (err) {
+                              return verificationDetail.metadata;
+                            }
+                          }
+                          return JSON.stringify(verificationDetail.metadata, null, 2);
+                        })()}
+                      </pre>
+                    </div>
+                  )}
+
+                  {String(verificationDetail.status || "").toLowerCase() === "pending" ? (
+                    <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <p className="text-sm font-semibold text-slate-900">Decision</p>
+                      <textarea
+                        rows={3}
+                        maxLength={500}
+                        value={verificationNotes}
+                        onChange={(e) => setVerificationNotes(e.target.value)}
+                        className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        placeholder="Add reviewer notes (optional, visible to the user if rejected)."
+                      />
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => decideVerification("rejected")}
+                          disabled={verificationDecisionLoading}
+                          className="btn-secondary px-4 py-2 text-xs text-rose-600 hover:text-rose-700 disabled:opacity-50"
+                        >
+                          {verificationDecisionLoading ? "Processing…" : "Reject"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => decideVerification("approved")}
+                          disabled={verificationDecisionLoading}
+                          className="btn-primary px-4 py-2 text-xs disabled:opacity-50"
+                        >
+                          {verificationDecisionLoading ? "Processing…" : "Approve"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                      <p>
+                        Decision recorded {formatDateTime(verificationDetail.reviewedAt)} by{" "}
+                        {verificationDetail.reviewedBy ? `admin #${verificationDetail.reviewedBy}` : "an administrator"}.
+                      </p>
+                      {verificationDetail.adminNotes && (
+                        <p className="mt-2 italic text-slate-500">Notes: {verificationDetail.adminNotes}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
       {tab === "archive" && (
       <section className="grid gap-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-60px_rgba(15,23,42,0.45)] backdrop-blur sm:p-6 md:grid-cols-2 md:p-8">
         <div>
@@ -3120,6 +3665,8 @@ export default function AdminPage() {
         onSubmit={submitPasswordReset}
       />
     </div>
+  </div>
+</div>
   );
 }
 

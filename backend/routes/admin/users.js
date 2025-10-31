@@ -136,7 +136,7 @@ module.exports = function registerUserRoutes(router) {
       const [rows] = await q(
         `
         SELECT id, fullName, username, email, state, residenceLGA, phone, nationality, dateOfBirth,
-               role, eligibilityStatus, isAdmin, createdAt, profilePhoto, lastLoginAt, deletedAt, purgeAt
+               role, eligibilityStatus, verificationStatus, isAdmin, createdAt, profilePhoto, lastLoginAt, deletedAt, purgeAt
           FROM Users
           ${whereClause}
          ORDER BY createdAt DESC, id DESC
@@ -175,7 +175,7 @@ module.exports = function registerUserRoutes(router) {
       }
       sql += ` ORDER BY id DESC`;
       const [rows] = await q(sql, params);
-      const header = "id,fullName,username,email,phone,state,residenceLGA,role,eligibilityStatus,createdAt\n";
+      const header = "id,fullName,username,email,phone,state,residenceLGA,role,eligibilityStatus,verificationStatus,createdAt\n";
       const csv = header + rows.map((r) => [
         r.id,
         JSON.stringify(r.fullName || ""),
@@ -186,6 +186,7 @@ module.exports = function registerUserRoutes(router) {
         JSON.stringify(r.residenceLGA || ""),
         r.role || "",
         r.eligibilityStatus || "",
+        r.verificationStatus || "",
         r.createdAt?.toISOString?.() || r.createdAt,
       ].join(",")).join("\n");
       res.setHeader("Content-Type", "text/csv");
@@ -300,6 +301,7 @@ module.exports = function registerUserRoutes(router) {
       });
 
       await hardDeleteUser(target, { reason: "admin" });
+      req.app.get("io")?.to(`user:${uid}`).emit("accountDeleted", { reason: "admin" });
       res.json({ success: true });
     } catch (err) {
       if (err?.status) {
