@@ -1,8 +1,9 @@
+const path = require("path");
 const multer = require("multer");
 const { q } = require("../../db");
 const { requireAuth, requireAdmin } = require("../../middleware/auth");
 const { recordAuditEvent } = require("../../utils/audit");
-const { ensureDirSync, buildPublicPath } = require("../../utils/uploads");
+const { ensureDirSync, buildPublicPath, toRelativePath, syncToObjectStorage, removeLocalFile } = require("../../utils/uploads");
 const {
   resolveAdminScope,
   candidateMatchesScope,
@@ -44,7 +45,16 @@ module.exports = function registerCandidateRoutes(router) {
 
   router.post("/upload-image", requireAuth, requireAdmin, upload.single("file"), async (req, res) => {
     try {
+      if (!req.file) return res.status(400).json({ error: "MISSING_FILE", message: "No file uploaded" });
+      const relative = toRelativePath("candidates", req.file.filename);
+      const absolute = req.file.path || path.join(req.file.destination || ensureDirSync("candidates"), req.file.filename);
+      await syncToObjectStorage({
+        relativePath: relative,
+        absolutePath: absolute,
+        contentType: req.file.mimetype,
+      });
       const url = buildPublicPath("candidates", req.file.filename);
+      removeLocalFile(absolute);
       res.json({ success: true, url });
     } catch (err) {
       console.error("admin/upload-image:", err);

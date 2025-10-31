@@ -1,9 +1,10 @@
 // backend/routes/user.js
 const express = require("express");
 const multer = require("multer");
+const path = require("path");
 const { q, one } = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
+const { ensureDirSync, buildPublicPath, toRelativePath, syncToObjectStorage, removeLocalFile } = require("../utils/uploads");
 
 const router = express.Router();
 
@@ -79,8 +80,16 @@ const upload = multer({
 router.post("/upload-avatar", requireAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file" });
+    const relative = toRelativePath("avatars", req.file.filename);
+    const absolute = req.file.path || path.join(req.file.destination || avatarDir, req.file.filename);
+    await syncToObjectStorage({
+      relativePath: relative,
+      absolutePath: absolute,
+      contentType: req.file.mimetype,
+    });
     const url = buildPublicPath("avatars", req.file.filename);
     await q(`UPDATE Users SET profilePhoto=? WHERE id=?`, [url, req.user.id]);
+    removeLocalFile(absolute);
     res.json({ success: true, url });
   } catch (e) {
     console.error("user/upload-avatar:", e);

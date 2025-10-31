@@ -8,5 +8,6 @@ require("./users")(router);
 require("./profileChanges")(router);
 require("./analytics")(router);
 require("./logs")(router);
+require("./files")(router);
 
 module.exports = router;

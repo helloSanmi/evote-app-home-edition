@@ -34,10 +34,33 @@ app.use(attachUserIfAny);
 app.use(require("./middleware/logger")());
 
 // Ensure & serve uploads
-const { uploadRoot, ensureDirSync } = require("./utils/uploads");
+const objectStorage = require("./services/objectStorage");
+const { uploadRoot, ensureDirSync, getSignedUrl } = require("./utils/uploads");
 ensureDirSync("avatars");
 ensureDirSync("candidates");
 ensureDirSync("profile");
+if (objectStorage.isConfigured()) {
+  const handleUploadsProxy = async (req, res, next) => {
+    const wildcard = req.params[0];
+    if (!wildcard) return next();
+    try {
+      const signed = await getSignedUrl(wildcard);
+      if (signed) {
+        res.set("Cache-Control", "private, max-age=30");
+        if (req.method === "HEAD") {
+          res.set("Location", signed);
+          return res.status(307).end();
+        }
+        return res.redirect(307, signed);
+      }
+    } catch (err) {
+      console.error("[uploads] proxy failed:", err?.message || err);
+    }
+    return next();
+  };
+  app.get("/uploads/*", handleUploadsProxy);
+  app.head("/uploads/*", handleUploadsProxy);
+}
 app.use("/uploads", express.static(uploadRoot));
 
 // Health

@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { q } = require("../db");
 const { recordAuditEvent } = require("./audit");
-const { ensureDirSync, uploadRoot } = require("./uploads");
+const { ensureDirSync, uploadRoot, removeFromObjectStorage } = require("./uploads");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PROFILE_DIR = ensureDirSync("profile");
@@ -42,6 +42,7 @@ async function cleanupOldUploads() {
         if (activePhotos.has(rel)) continue;
         const stats = fs.statSync(fullPath);
         if (stats.mtimeMs < cutoff) {
+          await removeFromObjectStorage(rel.replace("/uploads/", ""));
           safeUnlink(fullPath);
         }
       }
@@ -61,6 +62,7 @@ async function cleanupOldUploads() {
         if (activePhotos.has(rel)) continue;
         const stats = fs.statSync(fullPath);
         if (stats.mtimeMs < cutoff) {
+          await removeFromObjectStorage(rel.replace("/uploads/", ""));
           safeUnlink(fullPath);
         }
       }
@@ -103,6 +105,7 @@ async function hardDeleteUser(user, { reason = "retention" } = {}) {
     if (user.profilePhoto && user.profilePhoto.startsWith("/uploads/")) {
       const relative = user.profilePhoto.replace("/uploads/", "");
       const localPath = path.join(uploadRoot, relative);
+      await removeFromObjectStorage(relative);
       safeUnlink(localPath);
     }
   } catch (err) {

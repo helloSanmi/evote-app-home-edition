@@ -1,12 +1,13 @@
 const express = require("express");
 const multer = require("multer");
+const path = require("path");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const { q } = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { markAccountForDeletion } = require("../utils/retention");
 const { recordAuditEvent } = require("../utils/audit");
-const { ensureDirSync, buildPublicPath } = require("../utils/uploads");
+const { ensureDirSync, buildPublicPath, toRelativePath, syncToObjectStorage, removeLocalFile } = require("../utils/uploads");
 const {
   NAME_PART_PATTERN,
   FULL_NAME_PATTERN,
@@ -306,11 +307,19 @@ router.put("/", requireAuth, async (req, res) => {
 router.post("/photo", requireAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "MISSING_FILE", message: "No file uploaded" });
-    const rel = buildPublicPath("profile", req.file.filename);
-    await q(`UPDATE Users SET profilePhoto=? WHERE id=?`, [rel, req.user.id]);
-    res.json({ success: true, url: rel });
-  } catch (e) {
-    console.error("profile/photo:", e);
+    const relative = toRelativePath("profile", req.file.filename);
+    const absolute = req.file.path || path.join(req.file.destination || ensureDirSync("profile"), req.file.filename);
+    await syncToObjectStorage({
+      relativePath: relative,
+      absolutePath: absolute,
+      contentType: req.file.mimetype,
+    });
+    const url = buildPublicPath("profile", req.file.filename);
+    await q(`UPDATE Users SET profilePhoto=? WHERE id=?`, [url, req.user.id]);
+    removeLocalFile(absolute);
+    res.json({ success: true, url });
+  } catch (err) {
+    console.error("profile/photo:", err);
     res.status(500).json({ error: "SERVER", message: "Upload failed" });
   }
 });
